@@ -16,7 +16,6 @@ let retryTimer = null;
 let retryFailures = 0;
 let launchInFlight = null;
 let restorationInFlight = null;
-let abandonedChildren = new WeakSet();
 let armClose = new WeakMap();
 
 function positiveInteger(name, fallback) {
@@ -219,7 +218,6 @@ function waitForRetry(attempt) {
 
 async function retireArm(armChild) {
   if (!armChild) return true;
-  abandonedChildren.add(armChild);
   armChild.kill("SIGTERM");
   const closed = armClose.get(armChild);
   if (!closed) return false;
@@ -322,7 +320,6 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     settled = true;
     resolveClosed();
     releaseChild();
-    if (abandonedChildren.has(armChild)) return;
     const classification = classifyArmClose(stdout, stderr, code, signal);
     const predecessor = String(armChild.pid ?? "");
     if (classification.kind === "actionable") {
@@ -349,7 +346,6 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     settled = true;
     resolveClosed();
     releaseChild();
-    if (abandonedChildren.has(armChild)) return;
     if (restorationInFlight) {
       setArmStatus("failed");
       return;

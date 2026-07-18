@@ -42,7 +42,6 @@ let stopping = false;
 let seq = 0;
 let restoring = false;
 const armReadiness = new WeakMap<ChildProcess, Promise<boolean>>();
-const abandonedChildren = new WeakSet<ChildProcess>();
 const armClose = new WeakMap<ChildProcess, Promise<void>>();
 
 function positiveInteger(name: string, fallback: number): number {
@@ -178,7 +177,6 @@ export default function (pi: ExtensionAPI) {
 
   async function retireArm(armChild: ChildProcess | null): Promise<boolean> {
     if (!armChild) return true;
-    abandonedChildren.add(armChild);
     armChild.kill("SIGTERM");
     const closed = armClose.get(armChild);
     if (!closed) return false;
@@ -309,7 +307,6 @@ export default function (pi: ExtensionAPI) {
       settleReadiness(false);
       releaseChild();
       if (stopping) return;
-      if (abandonedChildren.has(armChild)) return;
       const classification = classifyClose(stdout, stderr, code, signal);
       const predecessor = String(armChild.pid ?? "");
       if (classification.kind === "actionable") {
@@ -335,7 +332,7 @@ export default function (pi: ExtensionAPI) {
       settleReadiness(false);
       releaseChild();
       if (stopping) return;
-      if (abandonedChildren.has(armChild) || restoring) return;
+      if (restoring) return;
       scheduleRetry(`watcher: FAILED - Pi extension arm child ${id} failed: ${error.message}`, String(armChild.pid ?? ""));
     });
     return { ok: true, message: `watcher: started Pi extension arm child ${id}` };
