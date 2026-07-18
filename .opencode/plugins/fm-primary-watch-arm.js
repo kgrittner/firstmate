@@ -325,11 +325,10 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     if (classification.kind === "actionable") {
       retryFailures = 0;
       setArmStatus("wake");
-      if (restorationInFlight) {
-        surfaceFailure(client, sessionID, classification.message);
-        return;
-      }
-      const restoration = restoreAfterActionableClose(paths, sessionID, client, predecessor);
+      const previousRestoration = restorationInFlight;
+      const restoration = previousRestoration
+        ? previousRestoration.catch(() => "").then(() => restoreAfterActionableClose(paths, sessionID, client, predecessor))
+        : restoreAfterActionableClose(paths, sessionID, client, predecessor);
       restorationInFlight = restoration;
       void restoration.then((failure) => {
         if (restorationInFlight === restoration) restorationInFlight = null;
