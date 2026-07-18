@@ -243,6 +243,9 @@ async function restoreAfterActionableClose(paths, sessionID, client, predecessor
   for (let attempt = 0; attempt <= REARM_RETRY_LIMIT; attempt += 1) {
     const { status, armChild } = await ensureArm(paths, sessionID, client, predecessorArmPid, true);
     if (status === "armed") return "";
+    // An actionable line belongs to this arm's close handler.
+    // Do not retire it before that handler can start the successor cycle.
+    if (status === "wake") return "";
     failure = restorationFailure(status);
     if (!(await retireArm(armChild))) {
       setArmStatus("failed");
