@@ -90,7 +90,7 @@ test_pi_extension_reports_external_healthy_watcher() {
 printf 'watcher: healthy pid=1 (beacon 0s)\n'
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" node --input-type=module 2>&1 <<'EOF'
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 FM_WATCH_REARM_RETRY_LIMIT=2 node --input-type=module 2>&1 <<'EOF'
 import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -199,6 +199,201 @@ EOF
   expect_code 0 "$status" "Pi custom tool must return Pi's AgentToolResult shape"
   [ -z "$out" ] || fail "Pi tool-result test printed output: $out"
   pass "Pi custom tool returns text content and structured details"
+}
+
+test_pi_actionable_close_starts_single_successor_before_delivery() {
+  local repo home plugin log stop out status
+  repo="$TMP_ROOT/pi-continuous-rearm-root"
+  home="$TMP_ROOT/pi-continuous-rearm-home"
+  log="$TMP_ROOT/pi-continuous-rearm.log"
+  stop="$TMP_ROOT/pi-continuous-rearm.stop"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s predecessor=%s\n' "$$" "${FM_WATCH_PREDECESSOR_ARM_PID:-none}" >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+if [ "$count" -eq 1 ]; then
+  printf 'signal: synthetic actionable close\n'
+  exit 0
+fi
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+let tool = null;
+let deliveryStarted = false;
+let rowsAtDelivery = 0;
+let releaseDelivery = () => {};
+const deliveryBlocked = new Promise((resolve) => {
+  releaseDelivery = resolve;
+});
+const pi = {
+  on() {},
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendUserMessage: async () => {
+    rowsAtDelivery = existsSync(process.env.FM_ARM_LOG)
+      ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length
+      : 0;
+    deliveryStarted = true;
+    await deliveryBlocked;
+  },
+};
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute("tool-call-continuity", {}, undefined, undefined, {});
+for (let i = 0; i < 250; i += 1) {
+  const rows = existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+    : [];
+  if (rows.length >= 2 && deliveryStarted) break;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+if (rows.length !== 2) throw new Error(`expected one successor arm, got ${rows.length}: ${rows.join(" | ")}`);
+if (!deliveryStarted) throw new Error("wake delivery did not begin");
+if (rowsAtDelivery !== 2) throw new Error(`wake delivery began before successor establishment (${rowsAtDelivery} arm rows)`);
+if (!/predecessor=[0-9]+/.test(rows[1])) throw new Error(`successor did not receive predecessor identity: ${rows[1]}`);
+await new Promise((resolve) => setTimeout(resolve, 100));
+const stableRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+if (stableRows.length !== 2) throw new Error(`single-flight violation launched ${stableRows.length} arms`);
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+releaseDelivery();
+process.exit(0);
+EOF
+  )
+  status=$?
+  expect_code 0 "$status" "Pi actionable close must start one successor before wake delivery settles"
+  [ -z "$out" ] || fail "Pi continuous-rearm test printed output: $out"
+  pass "Pi actionable close starts one successor before wake delivery settles"
+}
+
+test_pi_empty_close_retries_instead_of_disappearing() {
+  local repo home plugin log stop out status
+  repo="$TMP_ROOT/pi-empty-close-root"
+  home="$TMP_ROOT/pi-empty-close-home"
+  log="$TMP_ROOT/pi-empty-close.log"
+  stop="$TMP_ROOT/pi-empty-close.stop"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+if [ "$count" -eq 1 ]; then exit 0; fi
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 FM_WATCH_REARM_RETRY_LIMIT=2 node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+let tool = null;
+let prompts = 0;
+const pi = {
+  on() {},
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendUserMessage: async () => {
+    prompts += 1;
+  },
+};
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute("tool-call-empty", {}, undefined, undefined, {});
+for (let i = 0; i < 250; i += 1) {
+  const rows = existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+    : [];
+  if (rows.length >= 2) break;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+if (rows.length !== 2) throw new Error(`clean empty close was ignored: ${rows.join(" | ")}`);
+if (prompts !== 0) throw new Error(`restored transient close surfaced ${prompts} failure prompts`);
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+process.exit(0);
+EOF
+  )
+  status=$?
+  expect_code 0 "$status" "Pi clean empty close must trigger a bounded continuity retry"
+  [ -z "$out" ] || fail "Pi empty-close retry test printed output: $out"
+  pass "Pi clean empty close triggers a bounded continuity retry"
+}
+
+test_pi_actionable_close_rechecks_session_lock() {
+  local repo home plugin log release out status
+  repo="$TMP_ROOT/pi-close-lock-root"
+  home="$TMP_ROOT/pi-close-lock-home"
+  log="$TMP_ROOT/pi-close-lock.log"
+  release="$TMP_ROOT/pi-close-lock.release"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+while [ ! -e "$FM_RELEASE_FILE" ]; do sleep 0.02; done
+printf 'signal: lock handoff\n'
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_RELEASE_FILE="$release" node --input-type=module 2>&1 <<'EOF'
+import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+let tool = null;
+let prompt = "";
+const pi = {
+  on() {},
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendUserMessage: async (message) => {
+    prompt += message;
+  },
+};
+const lock = `${process.env.FM_HOME}/state/.lock`;
+writeFileSync(lock, `${process.pid}\n`);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute("tool-call-lock-close", {}, undefined, undefined, {});
+const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+try {
+  writeFileSync(lock, `${other.pid}\n`);
+  writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
+  for (let i = 0; i < 250 && !prompt.includes("no longer owns the lock"); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+  if (rows.length !== 1) throw new Error(`successor launched after lock loss: ${rows.join(" | ")}`);
+  if (!prompt.includes("no longer owns the lock")) throw new Error(`missing lock-loss failure: ${prompt}`);
+} finally {
+  other.kill("SIGTERM");
+}
+EOF
+  )
+  status=$?
+  [ "$status" -eq 0 ] || fail "Pi close handler must verify session-lock ownership before successor launch: $out"
+  [ -z "$out" ] || fail "Pi close lock test printed output: $out"
+  pass "Pi close handler verifies session-lock ownership before successor launch"
 }
 
 test_pi_arm_distinguishes_session_lock_ownership() {
@@ -615,35 +810,111 @@ EOF
 }
 
 test_opencode_primary_watch_plugin_rearms_after_wake() {
-  local plugin repo home log out status
+  local plugin repo home log stop out status
   plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
   repo="$TMP_ROOT/opencode-rearm-root"
   home="$TMP_ROOT/opencode-rearm-home"
   log="$TMP_ROOT/opencode-rearm.log"
+  stop="$TMP_ROOT/opencode-rearm.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
-printf 'arm\n' >> "${FM_ARM_LOG:?}"
-printf 'signal: synthetic wake\n'
+printf 'arm=%s predecessor=%s\n' "$$" "${FM_WATCH_PREDECESSOR_ARM_PID:-none}" >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+if [ "$count" -eq 1 ]; then
+  printf 'signal: synthetic wake\n'
+  exit 0
+fi
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" node 2>&1 <<'EOF'
-import { writeFileSync } from "node:fs";
+  out=$(PLUGIN="$plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" node 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 let prompts = 0;
-const waitForPrompts = async (expected) => {
-  for (let i = 0; i < 250; i += 1) {
-    if (prompts >= expected) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  console.error(`expected ${expected} prompts, saw ${prompts}`);
-  process.exit(1);
+let rowsAtPrompt = 0;
+let releasePrompt = () => {};
+const promptBlocked = new Promise((resolve) => {
+  releasePrompt = resolve;
+});
+const client = {
+  session: {
+    promptAsync: async () => {
+      rowsAtPrompt = existsSync(process.env.FM_ARM_LOG)
+        ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length
+        : 0;
+      prompts += 1;
+      await promptBlocked;
+    },
+  },
 };
+const hooks = await mod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+const event = { event: { type: "session.idle", properties: { sessionID: "session-test" } } };
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event(event);
+for (let i = 0; i < 250; i += 1) {
+  const rows = existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+    : [];
+  if (rows.length >= 2 && prompts >= 1) break;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+if (rows.length !== 2) throw new Error(`expected one successor arm, got ${rows.length}: ${rows.join(" | ")}`);
+if (prompts !== 1) throw new Error(`expected one blocked wake prompt, got ${prompts}`);
+if (rowsAtPrompt !== 2) throw new Error(`wake prompt began before successor establishment (${rowsAtPrompt} arm rows)`);
+if (!/predecessor=[0-9]+/.test(rows[1])) throw new Error(`successor did not receive predecessor identity: ${rows[1]}`);
+await new Promise((resolve) => setTimeout(resolve, 100));
+const stableRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+if (stableRows.length !== 2) throw new Error(`single-flight violation launched ${stableRows.length} arms`);
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+releasePrompt();
+EOF
+  )
+  status=$?
+  [ "$status" -eq 0 ] || fail "OpenCode watch plugin must start one successor before wake prompt delivery settles: $out"
+  [ -z "$out" ] || fail "OpenCode rearm test printed output: $out"
+  pass "OpenCode watcher plugin starts one successor before wake prompt delivery settles"
+}
+
+test_opencode_empty_close_retries_instead_of_disappearing() {
+  local plugin repo home log stop out status
+  plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
+  repo="$TMP_ROOT/opencode-empty-close-root"
+  home="$TMP_ROOT/opencode-empty-close-home"
+  log="$TMP_ROOT/opencode-empty-close.log"
+  stop="$TMP_ROOT/opencode-empty-close.stop"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  git init -q "$repo"
+  : > "$repo/AGENTS.md"
+  : > "$home/state/task.meta"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+if [ "$count" -eq 1 ]; then exit 0; fi
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 FM_WATCH_REARM_RETRY_LIMIT=2 node 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+let prompts = 0;
 const client = {
   session: {
     promptAsync: async () => {
@@ -656,18 +927,90 @@ const hooks = await mod.FmPrimaryWatchArm({
   directory: process.env.WORKTREE,
   worktree: process.env.WORKTREE,
 });
-const event = { event: { type: "session.idle", properties: { sessionID: "session-test" } } };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
-await hooks.event(event);
-await waitForPrompts(1);
-await hooks.event(event);
-await waitForPrompts(2);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
+for (let i = 0; i < 250; i += 1) {
+  const rows = existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+    : [];
+  if (rows.length >= 2) break;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+if (rows.length !== 2) throw new Error(`clean empty close was ignored: ${rows.join(" | ")}`);
+if (prompts !== 0) throw new Error(`restored transient close surfaced ${prompts} failure prompts`);
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode watch plugin must arm on the idle after a wake follow-up"
-  [ -z "$out" ] || fail "OpenCode rearm test printed output: $out"
-  pass "OpenCode watcher plugin rearms after a watcher wake"
+  expect_code 0 "$status" "OpenCode clean empty close must trigger a bounded continuity retry"
+  [ -z "$out" ] || fail "OpenCode empty-close retry test printed output: $out"
+  pass "OpenCode clean empty close triggers a bounded continuity retry"
+}
+
+test_opencode_actionable_close_rechecks_session_lock() {
+  local plugin repo home log release out status
+  plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
+  repo="$TMP_ROOT/opencode-close-lock-root"
+  home="$TMP_ROOT/opencode-close-lock-home"
+  log="$TMP_ROOT/opencode-close-lock.log"
+  release="$TMP_ROOT/opencode-close-lock.release"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  git init -q "$repo"
+  : > "$repo/AGENTS.md"
+  : > "$home/state/task.meta"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+while [ ! -e "$FM_RELEASE_FILE" ]; do sleep 0.02; done
+printf 'signal: lock handoff\n'
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" FM_RELEASE_FILE="$release" node 2>&1 <<'EOF'
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+let prompt = "";
+const client = {
+  session: {
+    promptAsync: async (request) => {
+      prompt += request.body.parts[0].text;
+    },
+  },
+};
+const hooks = await mod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+const lock = `${process.env.FM_HOME}/state/.lock`;
+writeFileSync(lock, `${process.pid}\n`);
+const eventPromise = hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
+for (let i = 0; i < 250 && !existsSync(process.env.FM_ARM_LOG); i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+try {
+  writeFileSync(lock, `${other.pid}\n`);
+  writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
+  await eventPromise;
+  for (let i = 0; i < 250 && !prompt.includes("no longer owns the lock"); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+  if (rows.length !== 1) throw new Error(`successor launched after lock loss: ${rows.join(" | ")}`);
+  if (!prompt.includes("no longer owns the lock")) throw new Error(`missing lock-loss failure: ${prompt}`);
+} finally {
+  other.kill("SIGTERM");
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "OpenCode close handler must verify session-lock ownership before successor launch"
+  [ -z "$out" ] || fail "OpenCode close lock test printed output: $out"
+  pass "OpenCode close handler verifies session-lock ownership before successor launch"
 }
 
 test_opencode_watch_arm_coordinates_with_turnend_guard() {
@@ -824,6 +1167,9 @@ test_tracked_extension_present_and_self_hashing
 test_spawn_template_mentions_pi_watch_placeholder
 test_pi_extension_reports_external_healthy_watcher
 test_pi_tool_returns_agent_tool_result
+test_pi_actionable_close_starts_single_successor_before_delivery
+test_pi_empty_close_retries_instead_of_disappearing
+test_pi_actionable_close_rechecks_session_lock
 test_pi_arm_distinguishes_session_lock_ownership
 test_pi_process_exit_cleanup_listener_lifecycle
 test_pi_process_exit_cleanup_stops_arm_child
@@ -834,5 +1180,7 @@ test_opencode_primary_watch_plugin_sources_effective_config
 test_opencode_primary_watch_plugin_requires_session_lock
 test_opencode_watch_arm_coordinator_respects_primary_scope
 test_opencode_primary_watch_plugin_rearms_after_wake
+test_opencode_empty_close_retries_instead_of_disappearing
+test_opencode_actionable_close_rechecks_session_lock
 test_opencode_watch_arm_coordinates_with_turnend_guard
 test_opencode_healthy_arm_output_does_not_suppress_guard
