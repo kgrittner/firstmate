@@ -601,10 +601,20 @@ const PROTECTED_SCRIPTS = [
   { relative: "bin/fm-watch.sh", kind: "watch" },
 ];
 
+// path.normalize spells its result with backslashes on win32, while
+// PROTECTED_SCRIPTS entries, submitted command words, and MSYS-converted roots
+// use forward slashes, so raw comparison silently never matches there.
+// Canonicalize every compared path to forward slashes, and case-fold on win32
+// where the filesystem is case-insensitive. POSIX spelling is unchanged.
+function canonicalPath(value) {
+  const normalized = path.normalize(value).split(path.sep).join("/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
 function protectedIdentity(value, root) {
-  const normalized = path.normalize(value);
+  const normalized = canonicalPath(value);
   for (const { relative, kind } of PROTECTED_SCRIPTS) {
-    if (normalized === relative || normalized === path.join(root, relative) || normalized.endsWith(`/${relative}`)) return kind;
+    if (normalized === relative || normalized === canonicalPath(path.join(root, relative)) || normalized.endsWith(`/${relative}`)) return kind;
   }
   return "";
 }
@@ -857,7 +867,7 @@ function analyzeProgram(command, context, depth = 0) {
 function xModePathAllowed(value, home) {
   if (value === "config/x-mode.env" || value === "./config/x-mode.env") return true;
   if (!path.isAbsolute(value)) return false;
-  return path.normalize(value) === path.join(path.normalize(home), "config/x-mode.env");
+  return canonicalPath(value) === canonicalPath(path.join(home, "config/x-mode.env"));
 }
 
 function ordinaryWordsOnly(tokens) {
