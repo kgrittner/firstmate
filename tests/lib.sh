@@ -39,6 +39,22 @@ export FM_GATE_REFUSE_BYPASS=1
 # shellcheck disable=SC2034
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Minimal deterministic PATH for restricted-PATH test cases. On Git Bash, git
+# lives in /mingw64/bin rather than /usr/bin, so a bare /usr/bin:/bin pin
+# silently loses git there; retain git's real directory on Windows.
+fm_test_base_path() {
+  local base=/usr/bin:/bin:/usr/sbin:/sbin gitdir
+  case "$(uname -s)" in
+    MINGW*|MSYS*)
+      gitdir=$(dirname "$(command -v git 2>/dev/null)" 2>/dev/null)
+      if [ -n "$gitdir" ] && [ "$gitdir" != /usr/bin ] && [ "$gitdir" != /bin ]; then
+        base="$gitdir:$base"
+      fi
+      ;;
+  esac
+  printf '%s\n' "$base"
+}
+
 # --- reporters --------------------------------------------------------------
 
 fail() {

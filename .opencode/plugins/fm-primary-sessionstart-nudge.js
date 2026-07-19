@@ -6,7 +6,15 @@ const handledSessions = new Set();
 
 function runProcess(command, args) {
   return new Promise((resolveResult) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"] });
+    let child;
+    try {
+      child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      // Windows spawn can throw synchronously (EFTYPE) for a non-PE target;
+      // stay fail-open like the async error path below.
+      resolveResult({ code: 0, stdout: "" });
+      return;
+    }
     let stdout = "";
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -42,7 +50,11 @@ export const FmPrimarySessionstartNudge = async ({ client, directory, worktree }
       if (!sessionID || handledSessions.has(sessionID) || !root) return;
       handledSessions.add(sessionID);
 
-      const result = await runProcess(`${root}/bin/fm-sessionstart-nudge.sh`, []);
+      // Windows cannot exec a shebang script directly; run it through bash.
+      const script = `${root}/bin/fm-sessionstart-nudge.sh`;
+      const result = process.platform === "win32"
+        ? await runProcess("bash", [script])
+        : await runProcess(script, []);
       const nudge = result.code === 0 ? result.stdout.trim() : "";
       if (!nudge) return;
 
