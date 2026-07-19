@@ -24,16 +24,33 @@ fm_pid_alive() {
 }
 
 fm_pid_identity() {
-  local pid=$1 out
+  local pid=$1 out start cmd
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
   # Pin LC_ALL=C so lstart's date format is locale-invariant: the identity is
   # written under one locale but re-read under the machine's ambient locale, which
   # would otherwise mismatch on a non-C locale (e.g. ko_KR) and reject a live watcher.
-  out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
-  [ -n "$out" ] || return 1
-  printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
+  if out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) && [ -n "$out" ]; then
+    printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
+    return 0
+  fi
+  # Windows (Git Bash / MSYS / Cygwin, verified 2026-07-18): the bundled ps has
+  # no -o support at all, so no watcher identity could ever be written or
+  # verified there. Derive the same stable (start time + command) identity from
+  # MSYS procfs instead: /proc/<pid>/stat field 22 is the start time in jiffies
+  # (read past the parenthesized comm so a space in it cannot shift fields),
+  # and /proc/<pid>/cmdline is the command. Both are pid-recycling-proof
+  # together, which is all this identity exists to guarantee. Strip through
+  # the LAST paren so a comm containing ')' cannot shift the field count.
+  start=$(sed 's/^.*)//' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}') || return 1
+  case "$start" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+  [ -n "$cmd" ] || cmd=$(cat "/proc/$pid/exename" 2>/dev/null) || return 1
+  [ -n "$cmd" ] || return 1
+  printf '%s %s\n' "$start" "$cmd"
 }
 
 fm_path_mtime() {

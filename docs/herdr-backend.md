@@ -890,3 +890,28 @@ Covered by the unit cases in `tests/fm-afk-launch.test.sh` (clear-on-fresh-entry
 - **Not implemented: mid-session secondmate liveness.** The `fm_backend_agent_alive`-driven respawn sweep (`bin/fm-bootstrap.sh`, see "Agent liveness probe reuses the husk classifier" above) only runs at session start.
   A secondmate dying mid-session is a harder follow-on: the watcher deliberately exempts secondmates from stale-pane detection (an idle secondmate pane is healthy by design), so catching a mid-session death would need a periodic liveness beacon distinct from that exemption, not implemented here.
   Deferred as a separate item - it changes the stale-classification/status vocabulary shared with `bin/fm-watch.sh` and `bin/fm-classify-lib.sh`, which is a bigger surface than this redelivery-loop fix should carry.
+
+## Windows (Git Bash / MSYS) verification addendum - 2026-07-18
+
+Verified live on Windows 11 (10.0.26200), Git Bash (MSYS, bash 5.x), herdr 0.7.4-preview.2026-07-17, treehouse (AppData install), during the first real Windows fleet bring-up.
+
+- **`pane get`'s `.foreground_cwd` is always null on Windows herdr.**
+  There is no /proc for herdr to inspect, so the field the adapter's worktree-discovery poll relied on never populates.
+  `.cwd` is NOT frozen there: herdr's shell-integration prompt hook (an OSC `9;9;<windows-path>` emission it injects into PowerShell panes via a wrapped `prompt` function) keeps it live.
+  Confirmed by running `cd data` in a real pane: `.cwd` followed the change while `.foreground_cwd` stayed null.
+  `fm_backend_herdr_current_path` therefore falls back `foreground_cwd // cwd`; on POSIX herdr the first branch still always wins.
+  Regression: `tests/fm-backend-herdr.test.sh:test_current_path_falls_back_to_cwd_when_foreground_cwd_absent`.
+- **treehouse's worktree subshell on Windows is `%COMSPEC%` (cmd.exe fallback), never `$SHELL`.**
+  Confirmed by binary inspection (the only shell-selection strings are `COMSPEC`/`cmd.exe`) and by a live `treehouse get` in a herdr pane, which entered the worktree inside cmd.exe.
+  cmd.exe neither emits OSC 9;9 (so worktree discovery timed out at 60s) nor runs the POSIX setup/launch lines fm-spawn sends next.
+  Fix: `fm_backend_herdr_task_env_args` passes `--env COMSPEC=<git-bash>` on `tab create` for task panes only, preferring the `bin\bash.exe` shim (which seeds PATH with /mingw64/bin and /usr/bin) over the raw `usr\bin\bash.exe` binary.
+  `FM_HERDR_COMSPEC` overrides: `off` disables (tests pin this for platform-neutral arg assertions), an explicit value passes through verbatim.
+  Regression: `tests/fm-backend-herdr.test.sh:test_create_task_passes_comspec_env_when_configured`.
+- **bash panes need their own OSC 9;9 emitter.**
+  Herdr only injects its cwd prompt hook into the PowerShell it launches; a nested bash reports nothing, and herdr rejects POSIX-form (`/c/...`) paths - only a Windows-form path with an existing target updates `.cwd`.
+  The captain's `~/.bashrc` carries a `HERDR_ENV`-guarded `PROMPT_COMMAND` hook that converts `$PWD` to `C:\...` form in pure bash (no cygpath dependency: a COMSPEC-launched bash may lack Git's PATH) and emits `ESC ]9;9;<path> ESC \`.
+  The drive letter must be uppercased: a lowercase `c:\...` recorded into task meta made `treehouse return` refuse the worktree as unmanaged (case-sensitive comparison), aborting teardown until the meta was corrected.
+- **Native Windows jq (winget jq 1.8.2) terminates `-r` output lines with CRLF.**
+  Every adapter value parsed via `jq -r` (tab ids, pane ids, cwds) picked up a trailing `\r`, which made `fm_backend_herdr_pane_for_tab` silently return empty and `create_task` false-refuse a spawn as a duplicate label.
+  Reproduced minimally: `printf '{"a":"x"}' | jq -r .a | od -c` -> `x \r \n`.
+  Worked around environment-side with a CR-stripping `jq` wrapper at `~/bin/jq` (PATH-precedent in Git Bash); a repo-side defense at the adapter's jq call sites remains open.

@@ -17,6 +17,10 @@ command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the her
 
 TMP_ROOT=$(fm_test_tmproot fm-backend-herdr-tests)
 export FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0
+# Pin the Windows-only COMSPEC --env pair off so tab-create arg assertions are
+# byte-identical on every platform; the dedicated COMSPEC test below overrides
+# this with an explicit value to assert the pair's exact shape.
+export FM_HERDR_COMSPEC=off
 
 # make_herdr_fakebin: a `herdr` stub that logs every invocation (one line,
 # unit-separated args, to $FM_HERDR_LOG) and returns the canned response for
@@ -616,6 +620,25 @@ test_create_task_creates_with_no_focus_flag() {
   pass "fm_backend_herdr_create_task: tab create passes --no-focus"
 }
 
+test_create_task_passes_comspec_env_when_configured() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/create-task-comspec"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # Windows herdr (verified 2026-07-18): treehouse's worktree subshell is
+  # %COMSPEC% (cmd.exe fallback, no SHELL consultation), and a cmd.exe subshell
+  # neither reports OSC 9;9 cwd nor runs fm-spawn's POSIX setup lines, so the
+  # adapter points COMSPEC at bash for the task pane via tab create --env.
+  # An explicit FM_HERDR_COMSPEC asserts the pair's exact shape on any platform.
+  printf '{"result":{"tabs":[]}}\n' > "$resp/1.out"
+  printf '{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_COMSPEC='C:\fake\bash.exe' \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-newtask /tmp/proj' "$ROOT" )
+  [ "$out" = "w1:t2 w1:p2" ] || fail "create_task with COMSPEC env should still echo '<tab_id> <pane_id>', got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''--env'$'\x1f''COMSPEC=C:\fake\bash.exe'$'\x1f''--no-focus' \
+    "create_task's tab create did not pass the configured COMSPEC --env pair before --no-focus"
+  pass "fm_backend_herdr_create_task: tab create passes the configured COMSPEC --env pair (Windows treehouse-subshell fix)"
+}
+
 # --- workspace_find: scoped to THIS home's own label, not just any match ----
 
 test_workspace_find_matches_only_this_homes_own_label() {
@@ -765,6 +788,21 @@ test_current_path_reads_cwd() {
   [ "$out" = "/tmp/fake-worktree" ] || fail "current_path should read foreground_cwd (the live process), not the frozen creation-time cwd, got '$out'"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''get'$'\x1f''w1:p2' "current_path did not call pane get"
   pass "fm_backend_herdr_current_path: reads pane foreground_cwd (the live running process), not the frozen creation-time cwd"
+}
+
+test_current_path_falls_back_to_cwd_when_foreground_cwd_absent() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/cwd-fallback"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # Windows herdr (verified 2026-07-18, herdr 0.7.4-preview): foreground_cwd is
+  # always null there, and .cwd is kept LIVE by the shell-integration OSC 9;9
+  # prompt hook instead of being frozen. The fallback to .cwd is the only live
+  # signal on that platform; on POSIX herdr foreground_cwd exists and still wins.
+  printf '{"result":{"pane":{"cwd":"C:\\\\fake-worktree","foreground_cwd":null}}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_current_path default:w1:p2' "$ROOT" )
+  [ "$out" = 'C:\fake-worktree' ] || fail "current_path should fall back to .cwd when foreground_cwd is null (Windows herdr), got '$out'"
+  pass "fm_backend_herdr_current_path: falls back to live .cwd when foreground_cwd is null (Windows herdr shape)"
 }
 
 # --- busy_state (semantic agent state) ---------------------------------------
@@ -2070,6 +2108,7 @@ test_create_task_refuses_when_agent_state_ambiguous
 test_create_task_husk_replacement_creates_before_closing
 test_create_task_creates_and_parses_ids
 test_create_task_creates_with_no_focus_flag
+test_create_task_passes_comspec_env_when_configured
 test_workspace_find_matches_only_this_homes_own_label
 test_list_live_scoped_to_this_homes_workspace_only
 test_parse_target
@@ -2080,6 +2119,7 @@ test_capture_preserves_pane_read_failure
 test_send_key_normalizes_and_targets_pane
 test_kill_is_best_effort
 test_current_path_reads_cwd
+test_current_path_falls_back_to_cwd_when_foreground_cwd_absent
 test_busy_state_working_maps_to_busy
 test_busy_state_done_and_blocked_map_to_idle
 test_busy_state_unknown_on_no_agent

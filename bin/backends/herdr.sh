@@ -493,8 +493,49 @@ fm_backend_herdr_agent_alive() {  # <target>
 # the safety argument). An ADOPTED workspace's caller always passes an empty
 # 4th arg, so this function never even queries for a prune candidate in that
 # case. Echoes "<tab_id> <pane_id>" on success.
+# Windows task-pane env (verified 2026-07-18, treehouse b7e613f-era binary):
+# treehouse's worktree subshell on Windows is %COMSPEC% with a cmd.exe
+# fallback and no SHELL consultation (confirmed by binary inspection - the
+# only shell-selection strings are COMSPEC/cmd.exe). A cmd.exe subshell
+# neither reports OSC 9;9 cwd to herdr (so fm-spawn's worktree-discovery poll
+# times out) nor runs the POSIX setup/launch lines fm-spawn sends next.
+# Pointing COMSPEC at Git Bash FOR THE TASK PANE ONLY makes `treehouse get`
+# open a bash subshell there, which the captain's herdr-guarded ~/.bashrc
+# OSC 9;9 hook keeps cwd-visible; nothing outside firstmate task panes is
+# affected.
+# FM_HERDR_COMSPEC: "off" disables the pair entirely (tests use this for
+# platform-neutral arg assertions), an explicit value is passed through
+# verbatim, and unset/"auto" detects Windows and resolves Git Bash.
+fm_backend_herdr_task_env_args() {
+  local comspec=${FM_HERDR_COMSPEC:-auto} root
+  case "$comspec" in
+    off) return 0 ;;
+    auto)
+      case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        *) return 0 ;;
+      esac
+      # Prefer Git for Windows' bin\bash.exe SHIM over usr\bin\bash.exe: the
+      # shim seeds the child's PATH with /mingw64/bin and /usr/bin, while the
+      # raw binary inherits the pane's Windows PATH and starts with no
+      # coreutils or git visible - a crippled environment for the crewmate.
+      root=$(cygpath -w / 2>/dev/null) || root=
+      if [ -n "$root" ] && [ -f "$root/bin/bash.exe" ]; then
+        comspec="$root\bin\bash.exe"
+      else
+        comspec=$(cygpath -w "$(command -v bash)" 2>/dev/null) || return 0
+      fi
+      ;;
+  esac
+  [ -n "$comspec" ] || return 0
+  printf -- '--env\nCOMSPEC=%s\n' "$comspec"
+}
+
 fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_tab_id>
-  local container=$1 label=$2 cwd=$3 seeded_tab_id=${4:-} session wsid list dup_tabs dup dup_pane dup_tab_ids out tab_id pane_id remaining_dup_tabs
+  local container=$1 label=$2 cwd=$3 seeded_tab_id=${4:-} session wsid list dup_tabs dup dup_pane dup_tab_ids out tab_id pane_id remaining_dup_tabs line env_args=()
+  while IFS= read -r line; do
+    [ -n "$line" ] && env_args+=("$line")
+  done < <(fm_backend_herdr_task_env_args)
   session=${container%%:*}
   wsid=${container#*:}
   list=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 1
@@ -516,7 +557,7 @@ fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_ta
 $dup_tabs
 EOF
   fi
-  out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) || return 1
+  out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd" --label "$label" ${env_args[@]+"${env_args[@]}"} --no-focus 2>/dev/null) || return 1
   tab_id=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
   pane_id=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
   if [ -z "$tab_id" ] || [ -z "$pane_id" ]; then
@@ -577,10 +618,21 @@ fm_backend_herdr_target_ready() {  # <target>
 # `.result.pane.foreground_cwd` tracks the ACTUALLY RUNNING foreground
 # process's cwd instead, which is what changes when `treehouse get` enters its
 # worktree subshell - confirmed live against a real treehouse acquisition.
+#
+# Windows herdr (verified 2026-07-18, herdr 0.7.4-preview): `foreground_cwd`
+# is always null (no /proc to inspect), and `.cwd` is NOT frozen there - the
+# shell-integration prompt hook (OSC 9;9) keeps it live, confirmed by watching
+# `.cwd` follow a `cd` in a real pane while `foreground_cwd` stayed null.
+# So fall back to `.cwd` when `foreground_cwd` is absent: on POSIX herdr the
+# first branch always wins (unchanged behavior), and on Windows the fallback
+# is the only live signal. A shell that never reports OSC 9;9 (e.g. a cmd.exe
+# subshell) leaves `.cwd` at its last reported value, which can only delay
+# worktree discovery into the caller's existing timeout, never misresolve it
+# forward.
 fm_backend_herdr_current_path() {  # <target>
   fm_backend_herdr_target_ready "$1" || return 0
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
-    | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
+    | jq -r '.result.pane.foreground_cwd // .result.pane.cwd // empty' 2>/dev/null
 }
 
 # fm_backend_herdr_send_text_line: send one line of TEXT then submit,
