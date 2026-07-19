@@ -35,6 +35,12 @@
 # OpenCode and Pi consume exit 2 plus stderr.
 set -u
 
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion). This hook
+# fails open on missing transport pieces, so an unreadable library exits 0 too.
+FM_CD_CHECK_LIB_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || exit 0
+# shellcheck source=bin/fm-jq-lib.sh
+. "$FM_CD_CHECK_LIB_DIR/fm-jq-lib.sh" 2>/dev/null || exit 0
+
 CMD=""
 CMD_SET=0
 CLAUDE_MODE=0
@@ -87,7 +93,7 @@ if [ "$CMD_SET" -eq 0 ]; then
   PAYLOAD=$(cat 2>/dev/null || true)
   [ -n "$PAYLOAD" ] || exit 0
   command -v jq >/dev/null 2>&1 || exit 0
-  CMD=$(printf '%s' "$PAYLOAD" | jq -r '(.toolInput.command // .tool_input.command // empty)' 2>/dev/null) || exit 0
+  CMD=$(printf '%s' "$PAYLOAD" | fm_jq -r '(.toolInput.command // .tool_input.command // empty)' 2>/dev/null) || exit 0
 fi
 
 [ -n "$CMD" ] || exit 0

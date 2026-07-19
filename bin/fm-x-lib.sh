@@ -46,6 +46,12 @@
 #   fmx_meta_link_clear <meta> - remove the X-request link entirely
 # Callers must have FM_HOME set before calling fmx_load_config.
 
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion; bin/fm-jq-lib.sh).
+# Sourcing here also provides it to every fm-x-*.sh consumer of this library.
+FM_X_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-jq-lib.sh
+. "$FM_X_LIB_DIR/fm-jq-lib.sh"
+
 # Read the value of KEY from a .env-style file: last assignment wins; tolerates a
 # leading "export ", surrounding whitespace, and one layer of matching single or
 # double quotes. Prints nothing (and succeeds) when the file or key is absent, so
@@ -277,7 +283,7 @@ fmx_extract_reply_context() {
     printf '{"platform":"","reply_max_chars":""}\n'
     return 0
   fi
-  jq -c '
+  fm_jq -c '
     def norm_platform:
       tostring | ascii_downcase
       | if . == "discord" or . == "discordapp" then "discord"
@@ -338,7 +344,7 @@ fmx_request_relay_context() {
   command -v jq >/dev/null 2>&1 || { printf '%s\n' "$empty"; return 1; }
   payload_file=$(mktemp "${TMPDIR:-/tmp}/fm-x-reqctx.XXXXXX") || { printf '%s\n' "$empty"; return 1; }
   body_file=$(mktemp "${TMPDIR:-/tmp}/fm-x-reqctx-body.XXXXXX") || { rm -f "$payload_file"; printf '%s\n' "$empty"; return 1; }
-  if ! jq -cn --arg rid "$rid" '{request_id:$rid}' > "$payload_file" 2>/dev/null; then
+  if ! fm_jq -cn --arg rid "$rid" '{request_id:$rid}' > "$payload_file" 2>/dev/null; then
     rm -f "$payload_file" "$body_file"; printf '%s\n' "$empty"; return 1
   fi
   code=$(fmx_post_json request-context "$payload_file" "$body_file"); rc=$?
@@ -355,8 +361,8 @@ fmx_request_relay_context() {
   [ -n "$ctx" ] || { printf '%s\n' "$empty"; return 1; }
   # A 200 that resolved neither a platform nor a limit is treated as unresolved so
   # the caller warns instead of recording a link with no split budget.
-  if [ "$(printf '%s' "$ctx" | jq -r '.platform // ""')" = "" ] \
-    && [ "$(printf '%s' "$ctx" | jq -r '.reply_max_chars // ""')" = "" ]; then
+  if [ "$(printf '%s' "$ctx" | fm_jq -r '.platform // ""')" = "" ] \
+    && [ "$(printf '%s' "$ctx" | fm_jq -r '.reply_max_chars // ""')" = "" ]; then
     printf '%s\n' "$empty"; return 1
   fi
   printf '%s\n' "$ctx"
@@ -387,12 +393,12 @@ fmx_context_registry_mtime() {
 
 fmx_context_registry_recorded_at() {
   local file=$1 now=${2:-} recorded_at
-  recorded_at=$(jq -r '
+  recorded_at=$(fm_jq -r '
     .recorded_at
     | if type == "number" and floor == . and . >= 0 then tostring
       elif type == "string" and test("^[0-9]+$") then .
       else "" end
-  ' "$file" 2>/dev/null) || recorded_at=
+  ' 2>/dev/null < "$file") || recorded_at=
   case "$recorded_at" in
     ''|*[!0-9]*) recorded_at= ;;
   esac
@@ -488,7 +494,7 @@ fmx_context_registry_set() {
   if [ -z "$recorded_at" ]; then
     recorded_at=$now
   fi
-  (set -o pipefail; jq -cn --arg rid "$rid" --arg platform "$platform" --arg max "$reply_max" \
+  (set -o pipefail; fm_jq -cn --arg rid "$rid" --arg platform "$platform" --arg max "$reply_max" \
     --argjson recorded_at "$recorded_at" \
     '{request_id:$rid, platform:$platform, reply_max_chars:$max, recorded_at:$recorded_at}' \
     | fmx_private_artifact_publish_stdin "$dir" "$rid.json" 600) || return 1
@@ -509,7 +515,7 @@ fmx_context_registry_get() {
     return 0
   fi
   fmx_context_registry_prune "$state"
-  jq -c '{platform:(.platform // ""), reply_max_chars:(.reply_max_chars // "")}' "$file" 2>/dev/null \
+  fm_jq -c '{platform:(.platform // ""), reply_max_chars:(.reply_max_chars // "")}' 2>/dev/null < "$file" \
     || printf '{"platform":"","reply_max_chars":""}\n'
 }
 
@@ -553,13 +559,13 @@ fmx_resolve_reply_context() {
         ;;
     esac
     [ -n "$ctx" ] || continue
-    source_p=$(printf '%s' "$ctx" | jq -r '.platform // ""' 2>/dev/null) || source_p=
-    source_m=$(printf '%s' "$ctx" | jq -r '.reply_max_chars // ""' 2>/dev/null) || source_m=
+    source_p=$(printf '%s' "$ctx" | fm_jq -r '.platform // ""' 2>/dev/null) || source_p=
+    source_m=$(printf '%s' "$ctx" | fm_jq -r '.reply_max_chars // ""' 2>/dev/null) || source_m=
     case "$source_p" in discord|x) [ -n "$p" ] || p=$source_p ;; esac
     case "$source_m" in ''|*[!0-9]*) ;; *) [ -n "$m" ] || m=$source_m ;; esac
     [ -n "$p" ] && [ -n "$m" ] && break
   done
-  jq -cn --arg platform "$p" --arg max "$m" \
+  fm_jq -cn --arg platform "$p" --arg max "$m" \
     '{platform:$platform, reply_max_chars:$max}'
   return 0
 }
@@ -590,7 +596,7 @@ fmx_reply_limit_for_platform() {
 # and prints a compact JSON array of chunks. Length is codepoint-based (via jq);
 # the relay remains the final authority and trims.
 fmx_split_thread() {
-  jq -Rsc --argjson limit "$1" --argjson cap "$2" '
+  fm_jq -Rsc --argjson limit "$1" --argjson cap "$2" '
     def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
     def fence_marker: test("^[[:space:]]*```");
     def fence_count: ((split("```") | length) - 1);
@@ -737,13 +743,13 @@ fmx_image_payload_file() {
     return 1
   fi
   if ! (set -o pipefail; base64 < "$path" | tr -d '\n\r' \
-    | jq -Rsc --arg media_type "$media_type" \
+    | fm_jq -Rsc --arg media_type "$media_type" \
       '{media_type:$media_type,data_base64:.}' > "$payload_file"); then
     rm -f "$payload_file"
     echo "$client: cannot read image file: $path" >&2
     return 1
   fi
-  jq -cn \
+  fm_jq -cn \
     --arg media_type "$media_type" \
     --arg source_path "$path" \
     --argjson bytes "$bytes" \
@@ -754,17 +760,17 @@ fmx_reply_payload_json() {
   local rid=$1 chunks=$2 n=$3 image_json_file=${4:-}
   if [ -n "$image_json_file" ]; then
     if [ "$n" -le 1 ]; then
-      printf '%s' "$chunks" | jq -c --arg rid "$rid" --slurpfile image "$image_json_file" \
+      printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" --slurpfile image "$(fm_jq_path "$image_json_file")" \
         '{request_id:$rid, text:(.[0] // ""), image:$image[0]}'
     else
-      printf '%s' "$chunks" | jq -c --arg rid "$rid" --slurpfile image "$image_json_file" \
+      printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" --slurpfile image "$(fm_jq_path "$image_json_file")" \
         '{request_id:$rid, text:.[0], texts:., image:$image[0]}'
     fi
   else
     if [ "$n" -le 1 ]; then
-      printf '%s' "$chunks" | jq -c --arg rid "$rid" '{request_id:$rid, text:(.[0] // "")}'
+      printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" '{request_id:$rid, text:(.[0] // "")}'
     else
-      printf '%s' "$chunks" | jq -c --arg rid "$rid" '{request_id:$rid, text:.[0], texts:.}'
+      printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" '{request_id:$rid, text:.[0], texts:.}'
     fi
   fi
 }
@@ -774,35 +780,35 @@ fmx_reply_outbox_json() {
   if [ -n "$image_preview_json" ]; then
     if [ "$followup" = 1 ]; then
       if [ "$n" -le 1 ]; then
-        printf '%s' "$chunks" | jq -c --arg rid "$rid" --argjson image "$image_preview_json" \
+        printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" --argjson image "$image_preview_json" \
           '{request_id:$rid, text:(.[0] // ""), image:$image, endpoint:"followup"}'
       else
-        printf '%s' "$chunks" | jq -c --arg rid "$rid" --argjson image "$image_preview_json" \
+        printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" --argjson image "$image_preview_json" \
           '{request_id:$rid, text:.[0], texts:., image:$image, endpoint:"followup"}'
       fi
     else
       if [ "$n" -le 1 ]; then
-        printf '%s' "$chunks" | jq -c --arg rid "$rid" --argjson image "$image_preview_json" \
+        printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" --argjson image "$image_preview_json" \
           '{request_id:$rid, text:(.[0] // ""), image:$image}'
       else
-        printf '%s' "$chunks" | jq -c --arg rid "$rid" --argjson image "$image_preview_json" \
+        printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" --argjson image "$image_preview_json" \
           '{request_id:$rid, text:.[0], texts:., image:$image}'
       fi
     fi
   else
     if [ "$followup" = 1 ]; then
       if [ "$n" -le 1 ]; then
-        printf '%s' "$chunks" | jq -c --arg rid "$rid" \
+        printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" \
           '{request_id:$rid, text:(.[0] // ""), endpoint:"followup"}'
       else
-        printf '%s' "$chunks" | jq -c --arg rid "$rid" \
+        printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" \
           '{request_id:$rid, text:.[0], texts:., endpoint:"followup"}'
       fi
     else
       if [ "$n" -le 1 ]; then
-        printf '%s' "$chunks" | jq -c --arg rid "$rid" '{request_id:$rid, text:(.[0] // "")}'
+        printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" '{request_id:$rid, text:(.[0] // "")}'
       else
-        printf '%s' "$chunks" | jq -c --arg rid "$rid" '{request_id:$rid, text:.[0], texts:.}'
+        printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" '{request_id:$rid, text:.[0], texts:.}'
       fi
     fi
   fi

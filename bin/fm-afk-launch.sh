@@ -57,6 +57,9 @@ FM_AFK_LAUNCH_WS_LABEL="firstmate-afk-daemon"
 . "$FM_AFK_LAUNCH_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-supervisor-target-lib.sh
 . "$FM_AFK_LAUNCH_DIR/fm-supervisor-target-lib.sh"
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion; bin/fm-jq-lib.sh).
+# shellcheck source=bin/fm-jq-lib.sh
+. "$FM_AFK_LAUNCH_DIR/fm-jq-lib.sh"
 # fm-afk-start.sh provides the daemon-lock liveness helpers and
 # fm_afk_clear_stale_artifacts; it is sourceable (BASH_SOURCE guard) and its
 # main does not run on source. It sets `set -eu`, so turn errexit back off for
@@ -212,7 +215,7 @@ fm_afk_launch_terminal_absent() {  # <backend> <target>
       out=$(fm_backend_herdr_cli "$session" pane get "$pane" 2>&1)
       result=$?
       [ "$result" -ne 0 ] || return 1
-      code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null) || return 1
+      code=$(printf '%s' "$out" | fm_jq -r '.error.code // empty' 2>/dev/null) || return 1
       [ "$code" = pane_not_found ]
       ;;
     tmux)
@@ -290,24 +293,24 @@ fm_afk_launch_herdr_recover_created() {  # <session> <label>
   local session=$1 label=$2 workspaces ws_count wsid panes pane_count pane i
   for i in $(seq 1 20); do
     workspaces=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || { sleep 0.05; continue; }
-    ws_count=$(printf '%s' "$workspaces" | jq --arg want "$label" \
+    ws_count=$(printf '%s' "$workspaces" | fm_jq --arg want "$label" \
       '[.result.workspaces[]? | select(.label == $want)] | length' 2>/dev/null) || { sleep 0.05; continue; }
     if [ "$ws_count" = 0 ]; then
       sleep 0.05
       continue
     fi
     [ "$ws_count" = 1 ] || return 1
-    wsid=$(printf '%s' "$workspaces" | jq -r --arg want "$label" \
+    wsid=$(printf '%s' "$workspaces" | fm_jq -r --arg want "$label" \
       '.result.workspaces[]? | select(.label == $want) | .workspace_id' 2>/dev/null) || return 1
     [ -n "$wsid" ] || return 1
     panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$wsid" 2>/dev/null) || { sleep 0.05; continue; }
-    pane_count=$(printf '%s' "$panes" | jq '[.result.panes[]?] | length' 2>/dev/null) || { sleep 0.05; continue; }
+    pane_count=$(printf '%s' "$panes" | fm_jq '[.result.panes[]?] | length' 2>/dev/null) || { sleep 0.05; continue; }
     if [ "$pane_count" = 0 ]; then
       sleep 0.05
       continue
     fi
     [ "$pane_count" = 1 ] || return 1
-    pane=$(printf '%s' "$panes" | jq -r '.result.panes[0].pane_id // empty' 2>/dev/null) || return 1
+    pane=$(printf '%s' "$panes" | fm_jq -r '.result.panes[0].pane_id // empty' 2>/dev/null) || return 1
     [ -n "$pane" ] || return 1
     printf '%s\t%s' "$wsid" "$pane"
     return 0
@@ -370,8 +373,8 @@ fm_afk_launch_create_herdr() {  # <captain-target> <captain-backend>
   label=${FM_AFK_LAUNCH_LABEL:-"$FM_AFK_LAUNCH_WS_LABEL-$$-${RANDOM:-0}-$(date '+%s')"}
   out=$(fm_backend_herdr_cli "$session" workspace create --cwd "$FM_HOME" --label "$label" --no-focus 2>/dev/null)
   create_result=$?
-  wsid=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
-  pane=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
+  wsid=$(printf '%s' "$out" | fm_jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
+  pane=$(printf '%s' "$out" | fm_jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
   if [ "$create_result" -ne 0 ] && [ -n "$wsid" ] && [ -n "$pane" ]; then
     fm_afk_launch_log "herdr create failed after returning exact ids; closing $session:$pane"
     if fm_afk_launch_record_write herdr "$session:$pane" "$wsid"; then

@@ -9,6 +9,12 @@
 # nested turn's own Stop hook exits without spawning another nested turn.
 set -u
 
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion). A hook must
+# fail open, so an unreadable library exits 0 like every other missing input.
+GROK_GUARD_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || exit 0
+# shellcheck source=bin/fm-jq-lib.sh
+. "$GROK_GUARD_DIR/fm-jq-lib.sh" 2>/dev/null || exit 0
+
 PAYLOAD=$(cat 2>/dev/null || true)
 [ -n "$PAYLOAD" ] || exit 0
 
@@ -23,7 +29,7 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-SESSION_ID=$(printf '%s' "$PAYLOAD" | jq -r '.sessionId // empty' 2>/dev/null) || exit 0
+SESSION_ID=$(printf '%s' "$PAYLOAD" | fm_jq -r '.sessionId // empty' 2>/dev/null) || exit 0
 [ -n "$SESSION_ID" ] || exit 0
 
 ERR=$(mktemp "${TMPDIR:-/tmp}/fm-turnend-grok.XXXXXX") || exit 0

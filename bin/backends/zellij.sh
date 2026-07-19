@@ -119,6 +119,10 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-backend-hometag-lib.sh
 . "$FM_BACKEND_ZELLIJ_ROOT/bin/fm-backend-hometag-lib.sh"
 
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion; bin/fm-jq-lib.sh).
+# shellcheck source=bin/fm-jq-lib.sh
+. "$FM_BACKEND_ZELLIJ_ROOT/bin/fm-jq-lib.sh"
+
 # Verified minimum: report.md recommends "likely Zellij 0.44 or newer" for
 # returned pane/tab IDs and dump-screen --pane-id; empirically verified
 # against the installed 0.44.0 (docs/zellij-backend.md).
@@ -262,7 +266,7 @@ fm_backend_zellij_container_ensure() {
 fm_backend_zellij_pane_for_tab() {  # <session> <tab_id>
   local session=$1 tab_id=$2
   fm_backend_zellij_cli "$session" action list-panes --json 2>/dev/null \
-    | jq -r --argjson t "$tab_id" '.[]? | select(.tab_id == $t and .is_plugin == false) | .id' 2>/dev/null | head -1
+    | fm_jq -r --argjson t "$tab_id" '.[]? | select(.tab_id == $t and .is_plugin == false) | .id' 2>/dev/null | head -1
 }
 
 # fm_backend_zellij_tab_for_pane: the owning tab id for <pane_id> in
@@ -272,13 +276,13 @@ fm_backend_zellij_pane_for_tab() {  # <session> <tab_id>
 fm_backend_zellij_tab_for_pane() {  # <session> <pane_id>
   local session=$1 pane_id=$2
   fm_backend_zellij_cli "$session" action list-panes --json 2>/dev/null \
-    | jq -r --argjson p "$pane_id" '.[]? | select(.id == $p and .is_plugin == false) | .tab_id' 2>/dev/null | head -1
+    | fm_jq -r --argjson p "$pane_id" '.[]? | select(.id == $p and .is_plugin == false) | .tab_id' 2>/dev/null | head -1
 }
 
 fm_backend_zellij_pane_exists() {  # <session> <pane_id>
   local session=$1 pane_id=$2
   fm_backend_zellij_cli "$session" action list-panes --json 2>/dev/null \
-    | jq -e --argjson p "$pane_id" '[.[]? | select(.id == $p and .is_plugin == false)] | length > 0' >/dev/null 2>&1
+    | fm_jq -e --argjson p "$pane_id" '[.[]? | select(.id == $p and .is_plugin == false)] | length > 0' >/dev/null 2>&1
 }
 
 # fm_backend_zellij_tab_matches_label: does <tab_id> in <session> carry the
@@ -300,11 +304,11 @@ fm_backend_zellij_tab_matches_label() {  # <session> <tab_id> <label>
   local session=$1 tab_id=$2 label=$3 scoped tabs count
   scoped=$(fm_backend_zellij_scoped_title "$label")
   tabs=$(fm_backend_zellij_cli "$session" action list-tabs --json 2>/dev/null)
-  printf '%s' "$tabs" | jq -e --argjson t "$tab_id" --arg want "$scoped" \
+  printf '%s' "$tabs" | fm_jq -e --argjson t "$tab_id" --arg want "$scoped" \
     '[.[]? | select(.tab_id == $t and .name == $want)] | length > 0' >/dev/null 2>&1 && return 0
-  printf '%s' "$tabs" | jq -e --argjson t "$tab_id" --arg want "$label" \
+  printf '%s' "$tabs" | fm_jq -e --argjson t "$tab_id" --arg want "$label" \
     '[.[]? | select(.tab_id == $t and .name == $want)] | length > 0' >/dev/null 2>&1 || return 1
-  count=$(printf '%s' "$tabs" | jq -r --arg want "$label" '[.[]? | select(.name == $want)] | length' 2>/dev/null)
+  count=$(printf '%s' "$tabs" | fm_jq -r --arg want "$label" '[.[]? | select(.name == $want)] | length' 2>/dev/null)
   [ "$count" = "1" ]
 }
 
@@ -330,12 +334,12 @@ fm_backend_zellij_create_task() {  # <session> <label> <cwd>
   fm_backend_zellij_session_exists "$session" || { echo "error: zellij session '$session' does not exist; run container_ensure first" >&2; return 1; }
   title=$(fm_backend_zellij_scoped_title "$label")
   tabs=$(fm_backend_zellij_cli "$session" action list-tabs --json 2>/dev/null)
-  dup=$(printf '%s' "$tabs" | jq -r --arg want "$title" '.[]? | select(.name == $want) | .tab_id' 2>/dev/null | head -1)
+  dup=$(printf '%s' "$tabs" | fm_jq -r --arg want "$title" '.[]? | select(.name == $want) | .tab_id' 2>/dev/null | head -1)
   if [ -n "$dup" ]; then
     echo "error: zellij tab '$title' already exists in session '$session'" >&2
     return 1
   fi
-  prev_active=$(printf '%s' "$tabs" | jq -r '.[]? | select(.active == true) | .tab_id' 2>/dev/null | head -1)
+  prev_active=$(printf '%s' "$tabs" | fm_jq -r '.[]? | select(.active == true) | .tab_id' 2>/dev/null | head -1)
   tab_id=$(fm_backend_zellij_cli "$session" action new-tab --cwd "$cwd" --name "$title" 2>/dev/null | tr -d '[:space:]')
   case "$tab_id" in
     ''|*[!0-9]*)
@@ -583,7 +587,7 @@ fm_backend_zellij_list_live() {  # <session>
     pane_id=$(fm_backend_zellij_pane_for_tab "$session" "$tab_id") || continue
     [ -n "$pane_id" ] || continue
     printf '%s:%s\tfm-%s\n' "$session" "$pane_id" "$plain"
-  done < <(printf '%s' "$tabs" | jq -r --arg prefix "$prefix" '.[]? | select(.name | startswith($prefix)) | "\(.tab_id)\t\(.name)"' 2>/dev/null)
+  done < <(printf '%s' "$tabs" | fm_jq -r --arg prefix "$prefix" '.[]? | select(.name | startswith($prefix)) | "\(.tab_id)\t\(.name)"' 2>/dev/null)
 }
 
 # fm_backend_zellij_resolve_bare_selector: the live-tab-listing fallback for
@@ -605,7 +609,7 @@ fm_backend_zellij_resolve_bare_selector() {  # <name>
   while IFS= read -r session; do
     [ -n "$session" ] || continue
     tabs=$(fm_backend_zellij_cli "$session" action list-tabs --json 2>/dev/null)
-    tab_id=$(printf '%s' "$tabs" | jq -r --arg want "$scoped" '.[]? | select(.name == $want) | .tab_id' 2>/dev/null | head -1)
+    tab_id=$(printf '%s' "$tabs" | fm_jq -r --arg want "$scoped" '.[]? | select(.name == $want) | .tab_id' 2>/dev/null | head -1)
     [ -n "$tab_id" ] || continue
     pane_id=$(fm_backend_zellij_pane_for_tab "$session" "$tab_id") || continue
     [ -n "$pane_id" ] || continue
@@ -625,7 +629,7 @@ EOF
         bare_tab_id=$tab_id
       fi
     done <<EOF_MATCHES
-$(printf '%s' "$tabs" | jq -r --arg want "$name" '.[]? | select(.name == $want) | .tab_id' 2>/dev/null)
+$(printf '%s' "$tabs" | fm_jq -r --arg want "$name" '.[]? | select(.name == $want) | .tab_id' 2>/dev/null)
 EOF_MATCHES
   done <<EOF
 $sessions

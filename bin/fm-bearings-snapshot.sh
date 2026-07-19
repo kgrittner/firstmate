@@ -54,6 +54,10 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLEET="$SCRIPT_DIR/fm-fleet-snapshot.sh"
 
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion; bin/fm-jq-lib.sh).
+# shellcheck source=bin/fm-jq-lib.sh
+. "$SCRIPT_DIR/fm-jq-lib.sh"
+
 # Bounds (overridable for tests / large fleets).
 FM_BEARINGS_LANDED=${FM_BEARINGS_LANDED:-6}
 FM_BEARINGS_LANDED_PER_HOME=${FM_BEARINGS_LANDED_PER_HOME:-$FM_BEARINGS_LANDED}
@@ -165,7 +169,7 @@ if [ "$ALL_LANDED" = 1 ] || [ "$ALL_SECONDMATES" = 1 ]; then
 else
   SNAP=$(FM_SNAPSHOT_NOW="$NOW" "$FLEET" --json) || exit $?
 fi
-HOME_LABEL=$(printf '%s' "$SNAP" | jq -er '.fm_home | strings | split("/") | (.[-2:] | join("/"))') \
+HOME_LABEL=$(printf '%s' "$SNAP" | fm_jq -er '.fm_home | strings | split("/") | (.[-2:] | join("/"))') \
   || { echo "fm-bearings-snapshot: invalid canonical snapshot" >&2; exit 1; }
 
 # --- optional live PR enrichment (the ONLY network path) --------------------
@@ -205,7 +209,7 @@ if [ "$INCLUDE_PRS" = 1 ]; then
       s=$(repo_slug "$u"); [ -n "$s" ] || continue
       case " $repos " in *" $s "*) : ;; *) repos="$repos $s" ;; esac
     done <<EOF
-$(printf '%s' "$SNAP" | jq -r '.tasks[].pr.url // empty')
+$(printf '%s' "$SNAP" | fm_jq -r '.tasks[].pr.url // empty')
 EOF
     while IFS= read -r wt; do
       [ -n "$wt" ] || continue
@@ -214,7 +218,7 @@ EOF
       s=$(repo_slug "$u"); [ -n "$s" ] || continue
       case " $repos " in *" $s "*) : ;; *) repos="$repos $s" ;; esac
     done <<EOF
-$(printf '%s' "$SNAP" | jq -r '.tasks[] | select(.kind != "secondmate") | .paths.worktree.path // empty')
+$(printf '%s' "$SNAP" | fm_jq -r '.tasks[] | select(.kind != "secondmate") | .paths.worktree.path // empty')
 EOF
 
     for repo in $repos; do PR_REPOS_TOTAL=$((PR_REPOS_TOTAL + 1)); done
@@ -227,7 +231,7 @@ EOF
         --json number,title,url,headRefName,reviewDecision,mergeable,statusCheckRollup 2>/dev/null) \
         || { nwarn=$((nwarn + 1)); continue; }
       [ -n "$out" ] || out='[]'
-      repo_result=$(printf '%s' "$out" | jq --arg repo "$repo" --argjson limit "$FM_BEARINGS_PR_LIMIT" '
+      repo_result=$(printf '%s' "$out" | fm_jq --arg repo "$repo" --argjson limit "$FM_BEARINGS_PR_LIMIT" '
         [ .[] | {
           num:(.number|tostring),
           repo:$repo,
@@ -242,12 +246,12 @@ EOF
               elif any($c[]; ((.status // "") != "COMPLETED") and ((.state // "") != "SUCCESS")) then "pending"
               else "passing" end)
         } ] as $rows | {returned:($rows | length), rows:$rows[:$limit]}') || { nwarn=$((nwarn + 1)); continue; }
-      returned=$(printf '%s' "$repo_result" | jq '.returned')
-      repo_rows=$(printf '%s' "$repo_result" | jq '.rows')
-      cnt=$(printf '%s' "$repo_rows" | jq 'length')
+      returned=$(printf '%s' "$repo_result" | fm_jq '.returned')
+      repo_rows=$(printf '%s' "$repo_result" | fm_jq '.rows')
+      cnt=$(printf '%s' "$repo_rows" | fm_jq 'length')
       [ "$returned" -gt "$FM_BEARINGS_PR_LIMIT" ] && ncapped=$((ncapped + 1))
       npr=$((npr + cnt))
-      rows=$(jq -n --argjson a "$rows" --argjson b "$repo_rows" '$a + $b')
+      rows=$(fm_jq -n --argjson a "$rows" --argjson b "$repo_rows" '$a + $b')
     done
     PR_REPOS_SHOWN=$nrepos
     PR_ROWS_CAPPED=$ncapped
@@ -266,7 +270,7 @@ EOF
 fi
 
 # --- projection: canonical snapshot -> fm-bearings.v1 model (JSON) ----------
-MODEL=$(printf '%s' "$SNAP" | jq \
+MODEL=$(printf '%s' "$SNAP" | fm_jq \
   --arg home "$HOME_LABEL" \
   --arg now "$NOW" \
   --arg prs "$PR_STATUS" \
@@ -459,7 +463,7 @@ fi
 # objects, so the encoder only needs object scalars, the tabular array form
 # (key[N]{fields}: + comma rows at +2 indent), and the empty-array form (key: []),
 # per the TOON spec. Quoting follows the spec exactly.
-TOON=$(printf '%s\n' "$MODEL" | jq -r '
+TOON=$(printf '%s\n' "$MODEL" | fm_jq -r '
   def q:
     tostring
     | if (. == "")

@@ -8,6 +8,10 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion; bin/fm-jq-lib.sh).
+# shellcheck source=bin/fm-jq-lib.sh
+. "$SCRIPT_DIR/fm-jq-lib.sh"
+
 usage() {
   cat <<'EOF'
 usage: fm-fleet-view.sh [--json]
@@ -28,7 +32,7 @@ command -v jq >/dev/null 2>&1 || { echo "fm-fleet-view: jq not found" >&2; exit 
 
 SNAPSHOT=$("$SCRIPT_DIR/fm-fleet-snapshot.sh" --json) || exit $?
 
-printf '%s\n' "$SNAPSHOT" | jq -r '
+printf '%s\n' "$SNAPSHOT" | fm_jq -r '
   def dash($v): if $v == null or $v == "" then "-" else $v end;
   def endpoint_exists($t):
     if $t.endpoint.exists == null then "unknown"
