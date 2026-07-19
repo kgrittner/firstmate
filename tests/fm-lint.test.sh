@@ -76,7 +76,13 @@ test_ci_installs_and_logs_the_pinned_version() {
   [ "$(grep -Fc "bin/fm-install-shellcheck.sh \"\$RUNNER_TEMP/bin\"" "$CI")" -eq 2 ] || fail "both CI jobs must use the shared ShellCheck installer"
   assert_grep "ACTUAL_SHA256=\$(sha256sum" "$INSTALLER" "installer must calculate the ShellCheck archive checksum"
   assert_grep "[ \"\$ACTUAL_SHA256\" = \"\$SHA256\" ]" "$INSTALLER" "installer must verify the ShellCheck archive checksum"
-  assert_grep "\"\$DESTINATION/shellcheck\" --version" "$INSTALLER" "installer must log the resolved ShellCheck version as evidence"
+  assert_grep "\"\$DESTINATION/\$BINARY_NAME\" --version" "$INSTALLER" "installer must log the resolved ShellCheck version as evidence"
+  # Platform awareness: each supported platform carries its own pinned checksum
+  # so a Windows or macOS install is verified, not just Linux CI's.
+  assert_grep 'Linux/x86_64' "$INSTALLER" "installer must select the Linux x86_64 artifact"
+  assert_grep 'Darwin/arm64' "$INSTALLER" "installer must select the Darwin arm64 artifact"
+  assert_grep 'MINGW*/*|MSYS*/*|CYGWIN*/*' "$INSTALLER" "installer must select the Windows zip artifact under Git Bash"
+  [ "$(grep -c '^    SHA256=' "$INSTALLER")" -eq 3 ] || fail "installer must pin one SHA256 per supported platform"
   pass "CI installs and logs the pinned ShellCheck version from the one owner"
 }
 
