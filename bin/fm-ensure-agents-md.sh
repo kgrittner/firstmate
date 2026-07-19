@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # Ensure a project worktree follows the agent-memory file convention.
 # AGENTS.md is the real project-intrinsic knowledge file; CLAUDE.md is a
-# relative symlink to it for compatibility. Creates a minimal AGENTS.md skeleton
-# when neither file exists, promotes a real CLAUDE.md file when it is the only
-# file present, and refuses to clobber distinct real files or wrong symlinks.
+# regular one-line file holding the Claude Code import '@AGENTS.md', which
+# works on every platform and filesystem with no symlink support required.
+# Creates a minimal AGENTS.md skeleton when neither file exists, promotes a
+# real CLAUDE.md file when it is the only file present, and refuses to clobber
+# distinct real files. A pre-existing CLAUDE.md symlink to AGENTS.md is
+# accepted as a legacy form but never created; a plain CLAUDE.md holding the
+# bare literal 'AGENTS.md' (a tracked symlink materialized by a checkout with
+# core.symlinks=false) is rewritten to the import form.
 # Owns the canonical "## Maintaining this file" self-governance wording for
 # project AGENTS.md files, injecting it idempotently into created skeletons,
 # promoted CLAUDE.md files, and any existing AGENTS.md that still lacks it.
 # Refuses a case-variant real memory file such as a lowercase agents.md, whose
-# CLAUDE.md symlink would carry an uppercase literal target that dangles on a
+# CLAUDE.md import would carry an uppercase literal target that dangles on a
 # case-sensitive filesystem (issue #389).
 # This is a worktree utility for crewmates, not a supervision script, so it does
 # not call fm-guard.sh.
@@ -64,7 +69,10 @@ ensure_maintenance_section() {
     return 0
   fi
   local eol=$'\n' sep=''
-  if LC_ALL=C grep -q $'\r$' "$AGENTS"; then
+  # -U forces binary mode: Windows (MSYS) grep otherwise strips CRs while
+  # reading, so a CRLF file would never match and injection would mix in
+  # LF-only lines.
+  if LC_ALL=C grep -qU $'\r$' "$AGENTS"; then
     eol=$'\r\n'
   fi
   if [ -s "$AGENTS" ]; then
@@ -92,30 +100,49 @@ EOF
   ensure_maintenance_section
 }
 
+write_claude_import() {
+  printf '@%s\n' "$AGENTS" > "$CLAUDE"
+}
+
+# Whole-file content of a regular CLAUDE.md with CRs removed; command
+# substitution strips trailing newlines, so a canonical import file and a
+# CRLF or newline-less variant all compare equal to '@AGENTS.md'.
+claude_file_content() {
+  tr -d '\r' < "$CLAUDE"
+}
+
+# The canonical cross-platform form: a regular file whose sole content is the
+# Claude Code import line '@AGENTS.md'.
+is_claude_import_file() {
+  [ -f "$CLAUDE" ] && [ ! -L "$CLAUDE" ] || return 1
+  [ "$(claude_file_content)" = "@$AGENTS" ]
+}
+
+# A tracked CLAUDE.md -> AGENTS.md symlink checked out with core.symlinks=false
+# materializes as a plain file holding the bare literal link target.
+is_claude_materialized_symlink() {
+  [ -f "$CLAUDE" ] && [ ! -L "$CLAUDE" ] || return 1
+  [ "$(claude_file_content)" = "$AGENTS" ]
+}
+
+# Legacy form: a relative symlink to AGENTS.md. Accepted when found, never
+# created. Only the literal relative target is recognized; deeper equivalence
+# checks (realpath comparison) were dropped because they needed python3, which
+# is not reliably present (on stock Windows, python3 is a Store stub).
 is_correct_claude_symlink() {
   [ -L "$CLAUDE" ] || return 1
-  target=$(readlink "$CLAUDE")
-  case "$target" in
+  case "$(readlink "$CLAUDE")" in
     "$AGENTS"|"./$AGENTS") return 0 ;;
   esac
-  [ -e "$AGENTS" ] || return 1
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$CLAUDE" "$AGENTS" <<'PY'
-import os
-import sys
-sys.exit(0 if os.path.realpath(sys.argv[1]) == os.path.realpath(sys.argv[2]) else 1)
-PY
-    return $?
-  fi
   return 1
 }
 
 # Refuse a case-variant real memory file (issue #389). On a case-insensitive
 # filesystem an existing lowercase agents.md satisfies every [ -e AGENTS.md ]
-# test below, so the script would emit a CLAUDE.md symlink whose uppercase
+# test below, so the script would emit a CLAUDE.md import whose uppercase
 # literal target dangles once the tree is checked out on a case-sensitive
 # filesystem. Reading the real directory entries catches the mismatch on both
-# filesystem kinds; surface it for manual reconciliation instead of linking blindly.
+# filesystem kinds; surface it for manual reconciliation instead of importing blindly.
 for entry in *; do
   if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
     continue
@@ -123,7 +150,7 @@ for entry in *; do
   if [ "$entry" != "$AGENTS" ]; then
     case "$entry" in
       [Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd])
-        echo "conflict: memory file is named $entry in $DIR but the convention is AGENTS.md; rename it to AGENTS.md so CLAUDE.md links portably" >&2
+        echo "conflict: memory file is named $entry in $DIR but the convention is AGENTS.md; rename it to AGENTS.md so CLAUDE.md imports portably" >&2
         exit 1
         ;;
     esac
@@ -146,7 +173,7 @@ if [ -e "$AGENTS" ]; then
       if [ "$MAINT_INJECTED" -eq 1 ]; then
         echo "updated: added ## Maintaining this file to AGENTS.md in $DIR"
       else
-        echo "unchanged: AGENTS.md with CLAUDE.md -> AGENTS.md in $DIR"
+        echo "unchanged: AGENTS.md with legacy CLAUDE.md -> AGENTS.md symlink in $DIR"
       fi
       exit 0
     fi
@@ -155,15 +182,30 @@ if [ -e "$AGENTS" ]; then
   fi
   if [ ! -e "$CLAUDE" ]; then
     ensure_maintenance_section
-    ln -s "$AGENTS" "$CLAUDE"
+    write_claude_import
     if [ "$MAINT_INJECTED" -eq 1 ]; then
-      echo "updated: added ## Maintaining this file to AGENTS.md and symlinked CLAUDE.md -> AGENTS.md in $DIR"
+      echo "updated: added ## Maintaining this file to AGENTS.md and wrote the CLAUDE.md @AGENTS.md import in $DIR"
     else
-      echo "symlinked: CLAUDE.md -> AGENTS.md in $DIR"
+      echo "created: CLAUDE.md @AGENTS.md import in $DIR"
     fi
     exit 0
   fi
   if [ -f "$CLAUDE" ]; then
+    if is_claude_import_file; then
+      ensure_maintenance_section
+      if [ "$MAINT_INJECTED" -eq 1 ]; then
+        echo "updated: added ## Maintaining this file to AGENTS.md in $DIR"
+      else
+        echo "unchanged: AGENTS.md with CLAUDE.md @AGENTS.md import in $DIR"
+      fi
+      exit 0
+    fi
+    if is_claude_materialized_symlink; then
+      ensure_maintenance_section
+      write_claude_import
+      echo "updated: rewrote materialized CLAUDE.md symlink to the @AGENTS.md import in $DIR"
+      exit 0
+    fi
     echo "conflict: both AGENTS.md and CLAUDE.md are real files in $DIR; reconcile them manually" >&2
     exit 1
   fi
@@ -174,7 +216,7 @@ fi
 if [ -L "$CLAUDE" ]; then
   if is_correct_claude_symlink; then
     write_skeleton
-    echo "created: AGENTS.md and kept CLAUDE.md -> AGENTS.md in $DIR"
+    echo "created: AGENTS.md and kept legacy CLAUDE.md -> AGENTS.md symlink in $DIR"
     exit 0
   fi
   echo "conflict: CLAUDE.md is a symlink in $DIR but AGENTS.md is missing and the link does not point to AGENTS.md" >&2
@@ -183,10 +225,16 @@ fi
 
 if [ -e "$CLAUDE" ]; then
   if [ -f "$CLAUDE" ]; then
+    if is_claude_import_file || is_claude_materialized_symlink; then
+      write_skeleton
+      write_claude_import
+      echo "created: AGENTS.md for the existing CLAUDE.md @AGENTS.md import in $DIR"
+      exit 0
+    fi
     mv "$CLAUDE" "$AGENTS"
     ensure_maintenance_section
-    ln -s "$AGENTS" "$CLAUDE"
-    echo "promoted: moved CLAUDE.md to AGENTS.md and symlinked CLAUDE.md -> AGENTS.md in $DIR"
+    write_claude_import
+    echo "promoted: moved CLAUDE.md to AGENTS.md and wrote the CLAUDE.md @AGENTS.md import in $DIR"
     exit 0
   fi
   echo "conflict: CLAUDE.md exists in $DIR but is not a regular file or symlink" >&2
@@ -194,5 +242,5 @@ if [ -e "$CLAUDE" ]; then
 fi
 
 write_skeleton
-ln -s "$AGENTS" "$CLAUDE"
-echo "created: AGENTS.md and CLAUDE.md -> AGENTS.md in $DIR"
+write_claude_import
+echo "created: AGENTS.md and CLAUDE.md @AGENTS.md import in $DIR"
