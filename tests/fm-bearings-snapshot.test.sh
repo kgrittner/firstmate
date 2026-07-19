@@ -13,6 +13,17 @@ set -u
 BEARINGS="$ROOT/bin/fm-bearings-snapshot.sh"
 TMP_ROOT=$(fm_test_tmproot fm-bearings)
 
+# The snapshot's per-source read timeouts default to 2s, sized for POSIX
+# process-spawn cost; a bash+jq pipeline alone can exceed that under Git Bash,
+# misreading healthy fixtures as timed out. Cases that pin an explicit timeout
+# to exercise the timeout path still override these suite-wide defaults.
+if fm_test_windows; then
+  export FM_SNAPSHOT_REGISTRY_TIMEOUT=20
+  export FM_SNAPSHOT_TERMINAL_TIMEOUT=20
+  export FM_SNAPSHOT_PARENT_ACTIVITY_TIMEOUT=20
+  export FM_SNAPSHOT_SECONDMATE_TIMEOUT=30
+fi
+
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
 # A fakebin that stubs the local tools the canonical snapshot may reach for, plus a
@@ -465,7 +476,18 @@ test_bad_secondmate_homes_never_revive_parent_work() {
   write_parent_secondmate_event "$home" timedout "$timedout" "old timed work"
 
   fakebin=$(make_fakebin "$home")
-  json=$(FAKE_NM_SLEEP=1 FM_SNAPSHOT_SECONDMATE_TIMEOUT=1 run "$home" "$fakebin" --json)
+  # The timedout home must exceed the per-home snapshot timeout while every
+  # other home stays inside it. Git Bash needs a much wider window (spawn cost
+  # alone approaches the 1s POSIX bound), and the inner per-child no-mistakes
+  # bound must then outlast the outer timeout so the OUTER timeout is still
+  # what fires (fake no-mistakes sleeps 30s under FAKE_NM_SLEEP=1).
+  local sm_timeout=1 nm_bound=
+  if fm_test_windows; then
+    sm_timeout=20
+    nm_bound=60
+  fi
+  json=$(FAKE_NM_SLEEP=1 FM_SNAPSHOT_SECONDMATE_TIMEOUT=$sm_timeout \
+    FM_CREW_STATE_NM_TIMEOUT=${nm_bound:-10} run "$home" "$fakebin" --json)
   [ "$have_unreadable" = yes ] && chmod 700 "$unreadable/data"
   printf '%s' "$json" | jq -e --arg unreadable "$have_unreadable" '
     (.secondmates | length) == (if $unreadable == "yes" then 5 else 4 end)
@@ -965,11 +987,17 @@ test_perl_fallback_bounds_github_call() {
   for cmd in bash dirname basename jq date sed git grep tail cut tr head sort wc perl sleep cat find; do
     ln -s "$(command -v "$cmd")" "$toolbin/$cmd"
   done
+  # timeout/gtimeout must stay hidden to exercise the perl fallback, so the
+  # DLL shim (not /usr/bin on PATH) keeps the symlinked MSYS binaries loadable
+  # on Windows; the wall-clock bound is wider there for spawn cost.
+  fm_test_toolbin_dlls "$toolbin"
+  local pr_bound=10
+  fm_test_windows && pr_bound=60
   started=$(date +%s)
   json=$(PATH="$fakebin:$toolbin" FM_HOME="$home" FM_BEARINGS_NOW=2026-07-11T18:00:00Z \
     FM_BEARINGS_PR_TIMEOUT=1 NET_LOG="$home/net.log" FAKE_GH_SLEEP=1 "$BEARINGS" --include-prs --json)
   elapsed=$(( $(date +%s) - started ))
-  [ "$elapsed" -lt 10 ] || fail "Perl fallback did not bound a stalled gh call (${elapsed}s)"
+  [ "$elapsed" -lt "$pr_bound" ] || fail "Perl fallback did not bound a stalled gh call (${elapsed}s)"
   printf '%s' "$json" | jq -e '.prs | test("unavailable")' >/dev/null \
     || fail "timed-out gh call did not fail soft: $json"
   pass "Perl fallback bounds stalled GitHub calls without coreutils timeout"
