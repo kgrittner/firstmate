@@ -760,10 +760,10 @@ fmx_reply_payload_json() {
   local rid=$1 chunks=$2 n=$3 image_json_file=${4:-}
   if [ -n "$image_json_file" ]; then
     if [ "$n" -le 1 ]; then
-      printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" --slurpfile image "$(fm_jq_path "$image_json_file")" \
+      printf '%s' "$chunks" | jq -c --arg rid "$rid" --slurpfile image "$(fm_jq_path "$image_json_file")" \
         '{request_id:$rid, text:(.[0] // ""), image:$image[0]}'
     else
-      printf '%s' "$chunks" | fm_jq -c --arg rid "$rid" --slurpfile image "$(fm_jq_path "$image_json_file")" \
+      printf '%s' "$chunks" | jq -c --arg rid "$rid" --slurpfile image "$(fm_jq_path "$image_json_file")" \
         '{request_id:$rid, text:.[0], texts:., image:$image[0]}'
     fi
   else
