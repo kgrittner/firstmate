@@ -434,10 +434,19 @@ test_bad_secondmate_homes_never_revive_parent_work() {
   append_secondmate_registry "$home" invalid "$invalid"
   write_parent_secondmate_event "$home" invalid "$invalid" "old invalid work"
 
-  make_valid_secondmate_home unreadable "$unreadable"
-  chmod 000 "$unreadable/data"
-  append_secondmate_registry "$home" unreadable "$unreadable"
-  write_parent_secondmate_event "$home" unreadable "$unreadable" "old unreadable work"
+  # The unreadable-home case needs chmod to actually revoke read access, which
+  # noacl mounts (Git Bash) cannot do; there the fixture is omitted and the
+  # remaining bad-home cases still run.
+  local have_unreadable=yes
+  if fm_test_chmod_negative_works; then
+    make_valid_secondmate_home unreadable "$unreadable"
+    chmod 000 "$unreadable/data"
+    append_secondmate_registry "$home" unreadable "$unreadable"
+    write_parent_secondmate_event "$home" unreadable "$unreadable" "old unreadable work"
+  else
+    have_unreadable=no
+    skip "unreadable secondmate home: chmod cannot revoke read access on this host (noacl mounts)"
+  fi
 
   make_valid_secondmate_home malformed "$malformed"
   printf '## In flight\nthis current row is not structured\n' > "$malformed/data/backlog.md"
@@ -457,9 +466,9 @@ test_bad_secondmate_homes_never_revive_parent_work() {
 
   fakebin=$(make_fakebin "$home")
   json=$(FAKE_NM_SLEEP=1 FM_SNAPSHOT_SECONDMATE_TIMEOUT=1 run "$home" "$fakebin" --json)
-  chmod 700 "$unreadable/data"
-  printf '%s' "$json" | jq -e '
-    (.secondmates | length) == 5
+  [ "$have_unreadable" = yes ] && chmod 700 "$unreadable/data"
+  printf '%s' "$json" | jq -e --arg unreadable "$have_unreadable" '
+    (.secondmates | length) == (if $unreadable == "yes" then 5 else 4 end)
       and all(.secondmates[]; .state == "unknown")
       and (.in_flight | map(.id) | all(. != "invalid" and . != "unreadable" and . != "malformed" and . != "timedout"))
       and (.secondmates | any(.[]; .id == "missing" and .provenance == "unknown"
@@ -467,7 +476,8 @@ test_bad_secondmate_homes_never_revive_parent_work() {
       and ([.secondmates[] | select(.id != "missing")]
         | all(.provenance == "parent-event-fallback" and .freshness == "historical-event"))
       and (.secondmates | any(.[]; .id == "invalid" and (.reason | contains("marked for"))))
-      and (.secondmates | any(.[]; .id == "unreadable" and (.reason | test("invalid home|unreadable"))))
+      and ($unreadable == "no"
+        or (.secondmates | any(.[]; .id == "unreadable" and (.reason | test("invalid home|unreadable")))))
       and (.secondmates | any(.[]; .id == "malformed" and (.reason | contains("unstructured current backlog row"))))
       and (.secondmates | any(.[]; .id == "timedout" and (.reason | contains("timed out"))))
   ' >/dev/null || fail "bad home outcomes revived stale work or lacked provenance: $json"
@@ -712,28 +722,34 @@ EOF
 
 test_registry_unavailability_and_bounds_are_explicit() {
   local home fakebin json canonical id mate boundary
-  home=$(make_home registry-unavailable)
-  mate="$TMP_ROOT/registry-hidden"
-  make_valid_secondmate_home hidden "$mate"
-  printf -- '- hidden - fixture (home: %s; scope: fixture; projects: sample; added 2026-07-11)\n' "$mate" > "$home/data/secondmates.md"
-  fm_write_secondmate_meta "$home/state/hidden.meta" "$mate" "firstmate:fm-hidden" sample
-  chmod 000 "$home/data/secondmates.md"
-  fakebin=$(make_fakebin "$home")
-  canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
-    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
-  json=$(run "$home" "$fakebin" --json)
-  chmod 600 "$home/data/secondmates.md"
-  printf '%s' "$canonical" | jq -e '
-    .secondmate_current.registry.complete == false
-      and (.secondmate_current.records[] | select(.id == "hidden")
-        | .registered == null
-          and (.current.reason | contains("registration is unknown")))
-  ' >/dev/null || fail "unavailable registry produced false unregistered provenance: $canonical"
-  printf '%s' "$json" | jq -e '
-    (.secondmates | any(.[]; .id == "(registry)" and .state == "unknown"
-      and .provenance == "registered-table" and .freshness == "unavailable"))
-      and (.omitted | any(.surface | contains("secondmate registry unavailable")))
-  ' >/dev/null || fail "unreadable registry disappeared from bearings: $json"
+  # The unreadable-registry case needs chmod to actually revoke read access,
+  # which noacl mounts (Git Bash) cannot do; the bounds cases below still run.
+  if fm_test_chmod_negative_works; then
+    home=$(make_home registry-unavailable)
+    mate="$TMP_ROOT/registry-hidden"
+    make_valid_secondmate_home hidden "$mate"
+    printf -- '- hidden - fixture (home: %s; scope: fixture; projects: sample; added 2026-07-11)\n' "$mate" > "$home/data/secondmates.md"
+    fm_write_secondmate_meta "$home/state/hidden.meta" "$mate" "firstmate:fm-hidden" sample
+    chmod 000 "$home/data/secondmates.md"
+    fakebin=$(make_fakebin "$home")
+    canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
+      "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+    json=$(run "$home" "$fakebin" --json)
+    chmod 600 "$home/data/secondmates.md"
+    printf '%s' "$canonical" | jq -e '
+      .secondmate_current.registry.complete == false
+        and (.secondmate_current.records[] | select(.id == "hidden")
+          | .registered == null
+            and (.current.reason | contains("registration is unknown")))
+    ' >/dev/null || fail "unavailable registry produced false unregistered provenance: $canonical"
+    printf '%s' "$json" | jq -e '
+      (.secondmates | any(.[]; .id == "(registry)" and .state == "unknown"
+        and .provenance == "registered-table" and .freshness == "unavailable"))
+        and (.omitted | any(.surface | contains("secondmate registry unavailable")))
+    ' >/dev/null || fail "unreadable registry disappeared from bearings: $json"
+  else
+    skip "unreadable secondmate registry: chmod cannot revoke read access on this host (noacl mounts)"
+  fi
   home=$(make_home registry-bounds)
   : > "$home/data/secondmates.md"
   for id in one two three; do

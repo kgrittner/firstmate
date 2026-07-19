@@ -11,7 +11,7 @@ set -u
 # shellcheck source=bin/fm-config-inherit-lib.sh
 . "$ROOT/bin/fm-config-inherit-lib.sh"
 
-BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+BASE_PATH=${FM_TEST_BASE_PATH:-$FM_TEST_SYSTEM_PATH}
 TMP_ROOT=$(fm_test_tmproot fm-shared-captain)
 
 fm_git_identity fmtest fmtest@example.invalid
@@ -189,18 +189,22 @@ test_unsafe_artifacts_and_failure_restore_readonly_mode() {
   assert_grep "unsafe destination" "$err" "unsafe destination hardlink error should be explicit"
   rm -f "$second/data/captain-shared.md" "$other"
 
-  write_shared "$second/data/captain-shared.md" "permission drift"
-  chmod "$FM_SHARED_CAPTAIN_MODE" "$second/data/captain-shared.md"
-  before_mode=$(file_mode "$second/data/captain-shared.md")
-  chmod 500 "$second/data"
-  err="$TMP_ROOT/restore-readonly.err"
-  propagate_secondmate_inheritance "$primary" "$second" >/dev/null 2>"$err"; rc=$?
-  chmod 700 "$second/data"
-  [ "$rc" -ne 0 ] || fail "unwritable destination directory should make quarantine fail"
-  [ "$(file_mode "$second/data/captain-shared.md")" = "$before_mode" ] \
-    || fail "failed quarantine did not restore read-only mode"
-  assert_grep "failed to quarantine divergent destination" "$err" \
-    "recoverable failure should explain quarantine failure"
+  if fm_test_chmod_negative_works; then
+    write_shared "$second/data/captain-shared.md" "permission drift"
+    chmod "$FM_SHARED_CAPTAIN_MODE" "$second/data/captain-shared.md"
+    before_mode=$(file_mode "$second/data/captain-shared.md")
+    chmod 500 "$second/data"
+    err="$TMP_ROOT/restore-readonly.err"
+    propagate_secondmate_inheritance "$primary" "$second" >/dev/null 2>"$err"; rc=$?
+    chmod 700 "$second/data"
+    [ "$rc" -ne 0 ] || fail "unwritable destination directory should make quarantine fail"
+    [ "$(file_mode "$second/data/captain-shared.md")" = "$before_mode" ] \
+      || fail "failed quarantine did not restore read-only mode"
+    assert_grep "failed to quarantine divergent destination" "$err" \
+      "recoverable failure should explain quarantine failure"
+  else
+    skip "quarantine-failure restore: chmod cannot make a directory unwritable on this host (noacl mounts)"
+  fi
   pass "unsafe shared captain artifacts are rejected and failure restores read-only mode"
 }
 

@@ -306,6 +306,7 @@ test_fail_open_missing_node() {
     tool_path=$(command -v "$tool") || continue
     ln -s "$tool_path" "$fakebin/$tool"
   done
+  fm_test_toolbin_dlls "$fakebin"
   # node deliberately absent from this PATH.
   out=$(PATH="$fakebin" "$CHECK" --command 'cd projects/foo' 2>&1); rc=$?
   expect_code 0 "$rc" "transport must fail open when node is unavailable"
@@ -320,6 +321,7 @@ test_fail_open_missing_jq_on_stdin() {
     tool_path=$(command -v "$tool") || continue
     ln -s "$tool_path" "$fakebin/$tool"
   done
+  fm_test_toolbin_dlls "$fakebin"
   # jq deliberately absent: the stdin transport cannot extract the command.
   out=$(printf '{"tool_input":{"command":"cd projects/foo"}}' | PATH="$fakebin" "$CHECK" 2>&1); rc=$?
   expect_code 0 "$rc" "stdin transport must fail open when jq is unavailable"
@@ -339,6 +341,7 @@ test_prefilter_skips_node_without_cd_substring() {
     tool_path=$(command -v "$tool") || continue
     ln -s "$tool_path" "$fakebin/$tool"
   done
+  fm_test_toolbin_dlls "$fakebin"
   cat > "$fakebin/node" <<EOF
 #!/usr/bin/env bash
 : > "$marker"

@@ -26,7 +26,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
 
 SESSION_START="$ROOT/bin/fm-session-start.sh"
-BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+BASE_PATH=${FM_TEST_BASE_PATH:-$FM_TEST_SYSTEM_PATH}
 TMP_ROOT=$(fm_test_tmproot fm-session-start-tests)
 fm_git_identity fmtest fmtest@example.invalid
 
