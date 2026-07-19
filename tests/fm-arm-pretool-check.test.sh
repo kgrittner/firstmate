@@ -369,32 +369,49 @@ test_failopen_garbage_stdin() {
   pass "fail-open: unparseable JSON on stdin"
 }
 
+# restricted_toolbin <fakebin-dir> <hidden-tool> <tool>... echoes a PATH entry
+# that carries exactly the listed tools while hiding <hidden-tool>.
+# On POSIX that is a fakebin of symlinks; on MSYS bash a symlinked fakebin
+# breaks the msys-2.0.dll search path so bash itself exits 127 before the
+# fail-open path under test runs, so pin /usr/bin instead - Git Bash ships
+# every tool these cases need there and neither jq nor node.
+restricted_toolbin() {
+  local fakebin=$1 hidden=$2 real tool
+  shift 2
+  case "$(uname -s)" in
+    MINGW*|MSYS*)
+      for tool in "$@"; do
+        [ -x "/usr/bin/$tool" ] || fail "restricted-PATH fixture needs /usr/bin/$tool"
+      done
+      [ ! -e "/usr/bin/$hidden" ] || fail "restricted-PATH fixture cannot hide $hidden: it exists in /usr/bin"
+      printf '%s\n' /usr/bin
+      ;;
+    *)
+      mkdir -p "$fakebin"
+      for tool in "$@"; do
+        real=$(command -v "$tool")
+        ln -sf "$real" "$fakebin/$tool"
+      done
+      printf '%s\n' "$fakebin"
+      ;;
+  esac
+}
+
 test_failopen_missing_jq() {
-  local dir fakebin rc real
+  local dir toolbin rc
   dir=$(fm_test_tmproot fm-arm-pretool-check)
-  fakebin="$dir/fakebin"
-  mkdir -p "$fakebin"
-  local tool
-  for tool in bash grep sed tr; do
-    real=$(command -v "$tool")
-    ln -sf "$real" "$fakebin/$tool"
-  done
-  PATH="$fakebin" bash -c "printf '%s' '{\"tool_input\":{\"command\":\"bin/fm-watch-arm.sh &\"}}' | '$CHECK'" >/dev/null 2>&1
+  toolbin=$(restricted_toolbin "$dir/fakebin" jq bash grep sed tr) || exit 1
+  PATH="$toolbin" bash -c "printf '%s' '{\"tool_input\":{\"command\":\"bin/fm-watch-arm.sh &\"}}' | '$CHECK'" >/dev/null 2>&1
   rc=$?
   [ "$rc" -eq 0 ] || fail "missing jq must fail open (exit 0) rather than crash-deny, got exit $rc"
   pass "fail-open: missing jq on stdin path"
 }
 
 test_failopen_missing_node() {
-  local dir fakebin rc real tool
+  local dir toolbin rc
   dir=$(fm_test_tmproot fm-arm-pretool-node)
-  fakebin="$dir/fakebin"
-  mkdir -p "$fakebin"
-  for tool in bash dirname; do
-    real=$(command -v "$tool")
-    ln -sf "$real" "$fakebin/$tool"
-  done
-  PATH="$fakebin" "$CHECK" --command 'bin/fm-watch-arm.sh &' >/dev/null 2>&1
+  toolbin=$(restricted_toolbin "$dir/fakebin" node bash dirname) || exit 1
+  PATH="$toolbin" "$CHECK" --command 'bin/fm-watch-arm.sh &' >/dev/null 2>&1
   rc=$?
   [ "$rc" -eq 0 ] || fail "missing node must fail open (exit 0), got exit $rc"
   pass "fail-open: missing classifier runtime"
