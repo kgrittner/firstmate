@@ -63,7 +63,7 @@ PAYLOAD=$(cat 2>/dev/null || true)
 # loop-guard field, so we must never block - fail open, not noisy.
 command -v jq >/dev/null 2>&1 || exit 0
 
-STOP_HOOK_ACTIVE=$(printf '%s' "$PAYLOAD" | fm_jq -r '.stop_hook_active // false' 2>/dev/null) || exit 0
+STOP_HOOK_ACTIVE=$(printf '%s' "$PAYLOAD" | jq -r '.stop_hook_active // false' 2>/dev/null) || exit 0
 [ "$STOP_HOOK_ACTIVE" = "true" ] && exit 0
 
 # --- scope precisely to a PRIMARY checkout ----------------------------------

@@ -60,7 +60,7 @@ command -v jq >/dev/null 2>&1 || { echo "fm-x-dismiss: jq not found" >&2; exit 1
 # Build the body with jq so the request_id is correctly JSON-escaped. This is
 # exactly what would be POSTed (and, in dry-run, exactly what we record/preview):
 # a dismiss carries only {request_id}.
-PAYLOAD=$(fm_jq -cn --arg rid "$REQ" '{request_id:$rid}') || {
+PAYLOAD=$(jq -cn --arg rid "$REQ" '{request_id:$rid}') || {
   echo "fm-x-dismiss: failed to build request payload" >&2; exit 1; }
 
 # Preview / dry-run: surface what we WOULD post and stop, without auth or network.
@@ -68,7 +68,7 @@ if [ -n "$FMX_DRY" ]; then
   outbox_dir="$STATE/x-outbox"
   # The recorded body carries an "endpoint":"dismiss" marker so an outbox record
   # is self-describing (the live POST body stays exactly {request_id}).
-  OUTREC=$(printf '%s' "$PAYLOAD" | fm_jq -c '. + {endpoint:"dismiss"}') || {
+  OUTREC=$(printf '%s' "$PAYLOAD" | jq -c '. + {endpoint:"dismiss"}') || {
     echo "fm-x-dismiss: failed to build dry-run outbox record" >&2; exit 1; }
   printf '%s\n' "$OUTREC" \
     | fmx_private_artifact_publish_stdin "$outbox_dir" "$REQ.json" 600 || {

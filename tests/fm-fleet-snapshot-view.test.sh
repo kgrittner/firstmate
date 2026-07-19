@@ -126,7 +126,7 @@ test_empty_fleet_json() {
   local home out view
   home=$(make_home empty)
   out=$(FM_HOME="$home" "$SNAPSHOT" --json)
-  printf '%s' "$out" | fm_jq -e '.schema == "fm-fleet-snapshot.v1" and .backlog.present == false and (.tasks|length == 0)' >/dev/null \
+  printf '%s' "$out" | jq -e '.schema == "fm-fleet-snapshot.v1" and .backlog.present == false and (.tasks|length == 0)' >/dev/null \
     || fail "empty snapshot schema or absence markers wrong: $out"
   view=$(FM_HOME="$home" "$VIEW")
   assert_contains "$view" "No live task metadata found." "empty fleet view should say no live metadata"
@@ -139,11 +139,11 @@ test_fixture_snapshot_json() {
   write_fixture "$home"
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
-  printf '%s' "$out" | fm_jq -e . >/dev/null || fail "snapshot must be valid JSON"
-  ids=$(printf '%s' "$out" | fm_jq -r '.tasks | map(.id) | join(",")')
+  printf '%s' "$out" | jq -e . >/dev/null || fail "snapshot must be valid JSON"
+  ids=$(printf '%s' "$out" | jq -r '.tasks | map(.id) | join(",")')
   [ "$ids" = "cmux-task,scout-task,secondmate-task,ship-task" ] \
     || fail "task ordering must be stable by id, got $ids"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "ship-task")
     | .current_state.state == "working"
       and .current_state.source == "pane"
@@ -152,27 +152,27 @@ test_fixture_snapshot_json() {
       and .hints.pending_decision == false
       and .paths.status_log.kind == "event_history"
   ' >/dev/null || fail "ship task state, PR, body, and stale event hints wrong"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "scout-task")
     | .paths.report.present == true
       and .hints.scout_report_present == true
   ' >/dev/null || fail "scout report pointer missing"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "secondmate-task")
     | .secondmate_projects == ["alpha","beta","gamma"]
       and .endpoint.agent_alive == "alive"
       and (.actions.watch | contains("do not routinely fm-peek"))
   ' >/dev/null || fail "secondmate return-channel guidance missing"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "cmux-task")
     | .backend == "cmux"
       and .paths.worktree.present == false
       and .current_state.state == "unknown"
   ' >/dev/null || fail "cmux missing-file row missing"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     [.backlog.records[] | select(.state == "queued")] | length == 2
   ' >/dev/null || fail "queued canonical and unstructured backlog records missing"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "done-task")
     | .state == "done" and .pr_url == "https://github.com/kunchenguid/firstmate/pull/7"
   ' >/dev/null || fail "done backlog PR row missing"
@@ -221,7 +221,7 @@ test_event_hints_follow_reconciled_current_state() {
   printf 'blocked: old failure\n' > "$home/state/stale-blocked.status"
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     def task($id): (.tasks[] | select(.id == $id));
     task("active-decision").current_state.state == "parked"
       and task("active-decision").hints.pending_decision == true
@@ -246,7 +246,7 @@ EOF
   printf '# Reported Scout\n' > "$home/data/reported-scout/report.md"
   printf '# Untracked Scout\n' > "$home/data/untracked-scout/report.md"
   out=$(FM_HOME="$home" "$SNAPSHOT" --json)
-  printf '%s' "$out" | fm_jq -e --arg home "$home" '
+  printf '%s' "$out" | jq -e --arg home "$home" '
     (.tasks | length) == 0
       and .scout_reports == [
         {id:"reported-scout",path:($home + "/data/reported-scout/report.md"),kind:"scout"},
@@ -290,12 +290,12 @@ EOF
   printf 'done: report ready\n' > "$home/state/bold-task.status"
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$data" FM_PROJECTS_OVERRIDE="$projects" "$SNAPSHOT" --json)
-  printf '%s' "$out" | fm_jq -e --arg data "$data" --arg projects "$projects" '
+  printf '%s' "$out" | jq -e --arg data "$data" --arg projects "$projects" '
     .roots.data == $data
       and .roots.projects == $projects
       and .backlog.path == ($data + "/backlog.md")
   ' >/dev/null || fail "snapshot did not respect data/projects overrides"
-  printf '%s' "$out" | fm_jq -e --arg data "$data" '
+  printf '%s' "$out" | jq -e --arg data "$data" '
     .backlog.records[] | select(.id == "bold-task")
     | .structured == true
       and .state == "in_flight"
@@ -307,22 +307,22 @@ EOF
       and .body_excerpt == "Bold body survives."
       and .report_path == "data/bold-task/report.md"
   ' >/dev/null || fail "bold in-flight backlog row did not parse"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "queued-comma")
     | .repo == "beta" and .since == "2026-07-08"
   ' >/dev/null || fail "queued comma metadata did not split"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "parenthetical-title")
     | .title == "Refresh sidebar (mobile)" and .repo == "beta"
   ' >/dev/null || fail "title parenthetical was stripped with metadata"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "blocked-reason")
     | .title == "Blocked Reason"
       and .repo == "beta"
       and .blocked_by == "queued-comma"
       and .blocked_reason == "waits on queued-comma"
   ' >/dev/null || fail "blocked suffix did not parse into title and reason"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "sample-decision-route")
     | .title == "Choose sample route"
       and .repo == "sample"
@@ -330,13 +330,13 @@ EOF
       and .hold_reason == "captain route choice pending"
       and .hold_kind == "captain"
   ' >/dev/null || fail "tasks-axi captain-hold metadata did not parse"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "done-comma")
     | .repo == "gamma"
       and .merged == "2026-07-09"
       and .completion == {verb:"merged",date:"2026-07-09"}
   ' >/dev/null || fail "done comma metadata did not split"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "done-bracket-pr")
     | .repo == "gamma"
       and .title == "Done Bracket PR"
@@ -344,14 +344,14 @@ EOF
       and .links == ["https://github.com/kunchenguid/firstmate/pull/43"]
       and .completion == {verb:"merged",date:"2026-07-12"}
   ' >/dev/null || fail "bracketed PR artifact did not parse"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "reported-comma")
     | .repo == "gamma"
       and .title == "Reported Scout"
       and .reported == "2026-07-10"
       and .completion == {verb:"reported",date:"2026-07-10"}
   ' >/dev/null || fail "reported closure metadata did not parse"
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "done-note")
     | .repo == "delta"
       and .title == "Done Note"
@@ -359,7 +359,7 @@ EOF
       and .done == "2026-07-11"
       and .completion == {verb:"done",date:"2026-07-11"}
   ' >/dev/null || fail "done closure metadata did not parse"
-  printf '%s' "$out" | fm_jq -e --arg data "$data" '
+  printf '%s' "$out" | jq -e --arg data "$data" '
     .tasks[] | select(.id == "bold-task")
     | .backlog.id == "bold-task"
       and .paths.report.path == ($data + "/bold-task/report.md")
@@ -442,7 +442,7 @@ test_open_decision_survives_later_unrelated_event() {
   printf 'done: an unrelated subtask finished\n' >> "$home/state/masked-decision.status"
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "masked-decision")
     | .hints.pending_decision == true
       and (.hints.open_decisions | length) == 1
@@ -468,7 +468,7 @@ test_secondmate_open_decision_survives_live_endpoint() {
   printf 'needs-decision [key=race]: choose ordering\n' > "$home/state/active-secondmate.status"
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "active-secondmate")
     | .endpoint.agent_alive == "alive"
       and .hints.pending_decision == true
@@ -496,7 +496,7 @@ test_open_decision_transfers_to_captain_hold() {
   printf 'captain-held [key=route]: tracked by transferred-decision-route\n' >> "$home/state/transferred-decision.status"
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "transferred-decision")
     | .hints.pending_decision == false
       and (.hints.open_decisions | length) == 0
@@ -522,7 +522,7 @@ test_open_decision_clears_on_keyed_resolution() {
   printf 'resolved [key=race]: captain chose subscribe-then-reconcile\n' >> "$home/state/resolved-decision.status"
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "resolved-decision")
     | .hints.pending_decision == false
       and (.hints.open_decisions | length) == 0
@@ -556,7 +556,7 @@ test_completed_scout_report_is_pointer_not_pending() {
   printf '# Lavish 103\nThe open question is whether to adopt approach A or B.\nThis needs a captain decision. Recommendation: A.\n' > "$home/data/lavish-103/report.md"
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "lavish-103")
     | .current_state.state == "done"
       and .hints.pending_decision == false
@@ -583,7 +583,7 @@ test_parked_scout_decision_stays_pending() {
   printf 'needs-decision [key=q1]: adopt approach A or B\n' > "$home/state/parked-scout.status"
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
-  printf '%s' "$out" | fm_jq -e '
+  printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "parked-scout")
     | .hints.pending_decision == true
       and (.hints.open_decisions | length) == 1

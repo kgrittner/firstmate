@@ -14,12 +14,16 @@
 #     consumers keep comparing the POSIX spelling.
 #
 # Contract for fm scripts (bin/*.sh, bin/backends/*.sh):
-#   - Call `fm_jq` wherever the script would call `jq`; never invoke bare jq
-#     except `command -v jq` presence checks.
+#   - Any script that invokes jq sources this library first (directly, or via a
+#     library that already sources it, like fm-x-lib.sh). Sourcing installs a
+#     `jq` shell function that transparently routes every ordinary `jq` call
+#     through fm_jq, so call sites keep reading (and linting) as plain jq;
+#     `command jq` remains the raw binary. tests/fm-jq.test.sh enforces the
+#     source-before-use rule across bin/.
 #   - Never pass a file PATH as a jq argument (input operand, --slurpfile,
 #     --rawfile, -f/--from-file, --argfile): with MSYS argument conversion
 #     disabled a native jq cannot open a POSIX spelling. Feed a single input by
-#     redirection (`fm_jq ... < "$file"`) and wrap an unavoidable path argument
+#     redirection (`jq ... < "$file"`) and wrap an unavoidable path argument
 #     in `$(fm_jq_path "$file")`, which prints a spelling every jq build opens.
 #
 # What fm_jq does, by resolved mode (memoized in exported FM_JQ_MODE):
@@ -93,6 +97,15 @@ fm_jq() {
       command jq "$@"
       ;;
   esac
+}
+
+# jq: transparent shim for sourcing scripts. Named `jq` deliberately: call
+# sites stay idiomatic, ShellCheck keeps applying its jq-aware checks (a
+# differently named function would trip SC2016 on every single-quoted filter),
+# and future call sites in a sourcing script are defended automatically.
+# fm_jq resolves the real binary via `command jq`, so this cannot recurse.
+jq() {
+  fm_jq "$@"
 }
 
 # fm_jq_path: print a spelling of <path> that the resolved jq can open when it

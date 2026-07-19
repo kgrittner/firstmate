@@ -81,7 +81,7 @@ Keep instructions as the authority and discovery layer, but make repeated execut
 - Plain dash `-`, never an em dash.
 - Never add an agent name as a commit co-author.
 - `bin/*.sh` and `bin/backends/*.sh` must pass `shellcheck`.
-- fm scripts invoke jq only through `fm_jq` from `bin/fm-jq-lib.sh` (never bare `jq`, except `command -v jq` presence checks), and never pass a file path as a jq argument; the library header owns the Windows CRLF/path-conversion contract and `tests/fm-jq.test.sh` enforces the no-bare-jq rule.
+- Any fm script that invokes jq sources `bin/fm-jq-lib.sh` first (its sourced `jq()` shim owns the Windows CRLF/path-conversion defense), and never passes a file path as a jq argument; the library header owns the full contract and `tests/fm-jq.test.sh` enforces the source-before-use rule.
 - Run `bin/fm-lint.sh` before treating a script change as done; it is the single owner of the lint definition (file set, config, and pinned shellcheck version) that CI and the no-mistakes pre-push gate both invoke, and it refuses to run under any other shellcheck version.
 - Colocate tests with the existing pattern in `tests/`, name them `<subject>.test.sh`, and extend an existing script rather than inventing a new runner.
 - A backend-verification doc (`docs/*-backend.md`) records empirical facts, not assumptions.

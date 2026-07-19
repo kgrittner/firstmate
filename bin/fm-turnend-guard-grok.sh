@@ -29,7 +29,7 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-SESSION_ID=$(printf '%s' "$PAYLOAD" | fm_jq -r '.sessionId // empty' 2>/dev/null) || exit 0
+SESSION_ID=$(printf '%s' "$PAYLOAD" | jq -r '.sessionId // empty' 2>/dev/null) || exit 0
 [ -n "$SESSION_ID" ] || exit 0
 
 ERR=$(mktemp "${TMPDIR:-/tmp}/fm-turnend-grok.XXXXXX") || exit 0

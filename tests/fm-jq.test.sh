@@ -162,20 +162,25 @@ test_fm_jq_path_identity_in_plain_mode() {
   pass "fm_jq_path is the identity in plain mode"
 }
 
-# Deterministic routing enforcement: fm scripts must invoke jq only through
-# fm_jq, so a Windows fleet never regains an unrouted parse site. Allowed
-# residues: `command -v jq` presence checks, comment/prose mentions, the
-# library's own `command jq` calls, and word matches that are not invocations
-# (case patterns, tool lists, install lines).
-test_no_bare_jq_invocations_in_fm_scripts() {
-  local hits
-  hits=$(grep -nE '(^|[|(;&`$! ])jq +' "$ROOT"/bin/*.sh "$ROOT"/bin/backends/*.sh \
-    | grep -v 'command -v jq' \
-    | grep -vE ':[0-9]+:[[:space:]]*#' \
-    | grep -v '/fm-jq-lib.sh:' \
-    | grep -vE 'install_cmd jq|MISSING(_MANUAL)?: jq|jq \(install|jq treehouse|curl jq') || true
-  [ -z "$hits" ] || fail "bare jq invocation(s) found; route through fm_jq: $hits"
-  pass "no bare jq invocations remain in fm scripts"
+# Deterministic routing enforcement: every fm script that invokes jq must
+# source bin/fm-jq-lib.sh (directly, or via fm-x-lib.sh which sources it) so
+# its jq calls hit the sourced jq() shim and a Windows fleet never regains an
+# unrouted parse site. Invocation detection ignores `command -v jq` presence
+# checks, comment lines, the library's own `command jq` calls, and word
+# matches that are not invocations (case patterns, tool lists, install lines).
+test_every_jq_invoking_fm_script_sources_the_lib() {
+  local file hits
+  for file in "$ROOT"/bin/*.sh "$ROOT"/bin/backends/*.sh; do
+    case "$file" in */fm-jq-lib.sh) continue ;; esac
+    hits=$(grep -nE '(^|[|(;&`$! ])jq +' "$file" \
+      | grep -v 'command -v jq' \
+      | grep -vE ':[0-9]+:[[:space:]]*#|^[[:space:]]*#' \
+      | grep -vE 'install_cmd jq|MISSING(_MANUAL)?: jq|jq \(install|jq treehouse|curl jq') || true
+    [ -n "$hits" ] || continue
+    grep -qE '(fm-jq-lib|fm-x-lib)\.sh' "$file" \
+      || fail "$file invokes jq without sourcing fm-jq-lib.sh: $hits"
+  done
+  pass "every jq-invoking fm script sources fm-jq-lib.sh"
 }
 
 test_real_jq_roundtrip() {
@@ -201,7 +206,7 @@ test_exit_status_preserved_in_strip_mode
 test_exit_status_preserved_in_plain_and_excl_modes
 test_resolve_mode_matches_host_platform
 test_fm_jq_path_identity_in_plain_mode
-test_no_bare_jq_invocations_in_fm_scripts
+test_every_jq_invoking_fm_script_sources_the_lib
 test_real_jq_roundtrip
 
 echo "fm-jq: all tests passed"

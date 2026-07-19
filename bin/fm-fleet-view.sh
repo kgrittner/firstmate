@@ -32,7 +32,7 @@ command -v jq >/dev/null 2>&1 || { echo "fm-fleet-view: jq not found" >&2; exit 
 
 SNAPSHOT=$("$SCRIPT_DIR/fm-fleet-snapshot.sh" --json) || exit $?
 
-printf '%s\n' "$SNAPSHOT" | fm_jq -r '
+printf '%s\n' "$SNAPSHOT" | jq -r '
   def dash($v): if $v == null or $v == "" then "-" else $v end;
   def endpoint_exists($t):
     if $t.endpoint.exists == null then "unknown"

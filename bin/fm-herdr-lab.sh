@@ -69,7 +69,7 @@ fm_herdr_lab_fleet_state() { # <session>
     fm_herdr_lab_error "cannot read Herdr sessions for the fleet-state tripwire"
     return 1
   }
-  snapshot=$(printf '%s' "$sessions" | fm_jq -c '
+  snapshot=$(printf '%s' "$sessions" | jq -c '
     [.sessions[]? | select(.default == true)]
     | if length == 1 and .[0].name == "default" and .[0].running == true
       then .[0] | {name, default, running, socket_path}
@@ -93,7 +93,7 @@ fm_herdr_lab_prepare() { # <session>
     fm_herdr_lab_error "cannot list Herdr sessions before provisioning '$name'"
     return 1
   }
-  if printf '%s' "$sessions" | fm_jq -e --arg name "$name" '.sessions[]? | select(.name == $name)' >/dev/null 2>&1; then
+  if printf '%s' "$sessions" | jq -e --arg name "$name" '.sessions[]? | select(.name == $name)' >/dev/null 2>&1; then
     fm_herdr_lab_error "session '$name' already exists; refusing to adopt or overwrite it"
     return 1
   fi
@@ -118,7 +118,7 @@ fm_herdr_lab_refuse_if_default() { # <session>
     fm_herdr_lab_error "refusing destructive call because session list failed"
     return 1
   }
-  flag=$(printf '%s' "$info" | fm_jq -r --arg name "$name" \
+  flag=$(printf '%s' "$info" | jq -r --arg name "$name" \
     '.sessions[]? | select(.name == $name) | .default' 2>/dev/null)
   [ "$flag" = false ] && return 0
   fm_herdr_lab_error "refusing destructive call for '$name': session is absent or default (default=${flag:-<not found>})"
@@ -183,14 +183,14 @@ fm_herdr_lab_provision() { # <session>
     fm_herdr_lab_error "cannot list Herdr sessions before provisioning '$name'"
     return 1
   }
-  if printf '%s' "$sessions" | fm_jq -e --arg name "$name" '.sessions[]? | select(.name == $name)' >/dev/null 2>&1; then
+  if printf '%s' "$sessions" | jq -e --arg name "$name" '.sessions[]? | select(.name == $name)' >/dev/null 2>&1; then
     tripwire=$(fm_herdr_lab_tripwire_path "$name")
     [ -f "$tripwire" ] || {
       fm_herdr_lab_error "missing fleet-state tripwire for existing session '$name'; refusing to adopt it"
       return 1
     }
     fm_herdr_lab_refuse_if_default "$name" || return 1
-    running=$(printf '%s' "$sessions" | fm_jq -r --arg name "$name" \
+    running=$(printf '%s' "$sessions" | jq -r --arg name "$name" \
       '.sessions[]? | select(.name == $name) | .running' 2>/dev/null)
     [ "$running" = false ] || {
       fm_herdr_lab_error "session '$name' is not stopped; refusing to re-provision it"
@@ -206,7 +206,7 @@ fm_herdr_lab_provision() { # <session>
   max_attempts=300
   timeout_seconds=60
   while [ "$attempt" -lt "$max_attempts" ]; do
-    running=$(fm_herdr_lab_cli "$name" status --json 2>/dev/null | fm_jq -r '.server.running // false' 2>/dev/null) || running=false
+    running=$(fm_herdr_lab_cli "$name" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null) || running=false
     if [ "$running" = true ]; then
       fm_herdr_lab_refuse_if_default "$name" || {
         fm_herdr_lab_cancel_provision "$server_pid"
@@ -270,7 +270,7 @@ fm_herdr_lab_teardown() { # <session>
     fm_herdr_lab_error "cannot list Herdr sessions before teardown"
     return 1
   }
-  if ! printf '%s' "$sessions" | fm_jq -e --arg name "$name" '.sessions[]? | select(.name == $name)' >/dev/null 2>&1; then
+  if ! printf '%s' "$sessions" | jq -e --arg name "$name" '.sessions[]? | select(.name == $name)' >/dev/null 2>&1; then
     fm_herdr_lab_verify_tripwire "$name"
     return
   fi
@@ -282,7 +282,7 @@ fm_herdr_lab_teardown() { # <session>
     fm_herdr_lab_error "cannot confirm removal of lab session '$name' after teardown"
     return 1
   }
-  if printf '%s' "$sessions" | fm_jq -e --arg name "$name" '.sessions[]? | select(.name == $name)' >/dev/null 2>&1; then
+  if printf '%s' "$sessions" | jq -e --arg name "$name" '.sessions[]? | select(.name == $name)' >/dev/null 2>&1; then
     if [ "$delete_status" -ne 0 ]; then
       fm_herdr_lab_error "session delete failed for '$name' and the lab session remains"
     else

@@ -221,8 +221,8 @@ else
     echo "fm-x-reply: failed to resolve request platform context" >&2
     exit 1
   }
-  REQ_PLATFORM=${FMX_REPLY_PLATFORM:-$(printf '%s' "$REPLY_CONTEXT" | fm_jq -r '.platform // ""')}
-  REQ_EXPLICIT_MAX=${FMX_REPLY_MAX_CHARS:-$(printf '%s' "$REPLY_CONTEXT" | fm_jq -r '.reply_max_chars // ""')}
+  REQ_PLATFORM=${FMX_REPLY_PLATFORM:-$(printf '%s' "$REPLY_CONTEXT" | jq -r '.platform // ""')}
+  REQ_EXPLICIT_MAX=${FMX_REPLY_MAX_CHARS:-$(printf '%s' "$REPLY_CONTEXT" | jq -r '.reply_max_chars // ""')}
 fi
 case "$REQ_PLATFORM" in
   discord|x|'') ;;
@@ -256,7 +256,7 @@ if [ -n "$IMAGE_PATH" ]; then
   reply_make_tmp_file IMAGE_PAYLOAD_FILE || {
     echo "fm-x-reply: cannot create image payload temp file" >&2; exit 1; }
   IMAGE_PREVIEW=$(fmx_image_payload_file "$IMAGE_PATH" fm-x-reply "$IMAGE_PAYLOAD_FILE") || exit 1
-  printf '%s' "$IMAGE_PREVIEW" | fm_jq -e . >/dev/null 2>&1 || {
+  printf '%s' "$IMAGE_PREVIEW" | jq -e . >/dev/null 2>&1 || {
     echo "fm-x-reply: failed to build image preview" >&2; exit 1; }
 fi
 
@@ -267,7 +267,7 @@ CHUNKS=$(printf '%s' "$TEXT" | fmx_split_thread "$REPLY_MAX" "$FMX_THREAD_MAX") 
   echo "fm-x-reply: failed to split reply into a thread" >&2
   exit 1
 }
-N=$(printf '%s' "$CHUNKS" | fm_jq 'length' 2>/dev/null) || N=
+N=$(printf '%s' "$CHUNKS" | jq 'length' 2>/dev/null) || N=
 case "$N" in ''|*[!0-9]*) echo "fm-x-reply: failed to split reply into a thread" >&2; exit 1 ;; esac
 [ "$N" -gt 0 ] || { echo "fm-x-reply: empty reply text" >&2; exit 2; }
 
@@ -300,11 +300,11 @@ if [ -n "$FMX_DRY" ]; then
   }
   if [ "$N" -le 1 ]; then
     printf 'fm-x-reply: DRY RUN - would POST to %s/connector/%s (recorded: state/x-outbox/%s.json): %s\n' \
-      "$FMX_RELAY" "$ENDPOINT" "$REQ" "$(printf '%s' "$CHUNKS" | fm_jq -r '.[0]')" >&2
+      "$FMX_RELAY" "$ENDPOINT" "$REQ" "$(printf '%s' "$CHUNKS" | jq -r '.[0]')" >&2
   else
     printf 'fm-x-reply: DRY RUN - would POST a %s-tweet thread to %s/connector/%s (recorded: state/x-outbox/%s.json):\n' \
       "$N" "$FMX_RELAY" "$ENDPOINT" "$REQ" >&2
-    printf '%s' "$CHUNKS" | fm_jq -r '.[]' | while IFS= read -r __chunk; do printf '  %s\n' "$__chunk" >&2; done
+    printf '%s' "$CHUNKS" | jq -r '.[]' | while IFS= read -r __chunk; do printf '  %s\n' "$__chunk" >&2; done
   fi
   printf '%s\n' "$REQ"
   exit 0
@@ -336,7 +336,7 @@ case "$code" in
   409)
     if [ "$FOLLOWUP" = 1 ]; then
       if [ -s "$RESPONSE_BODY_FILE" ] && {
-        fm_jq -e '.error == "followup_unavailable"' >/dev/null 2>&1 < "$RESPONSE_BODY_FILE" ||
+        jq -e '.error == "followup_unavailable"' >/dev/null 2>&1 < "$RESPONSE_BODY_FILE" ||
           grep -F 'followup_unavailable' "$RESPONSE_BODY_FILE" >/dev/null 2>&1
       }; then
         echo "fm-x-reply: relay rejected the follow-up (confirmed followup_unavailable marker): HTTP 409" >&2

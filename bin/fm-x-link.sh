@@ -142,8 +142,8 @@ if [ -z "$CARRY_TS" ]; then
     echo "fm-x-link: failed to resolve request reply context" >&2
     exit 1
   }
-  REQ_PLATFORM=$(printf '%s' "$REPLY_CONTEXT" | fm_jq -r '.platform // ""')
-  REQ_EXPLICIT_MAX=$(printf '%s' "$REPLY_CONTEXT" | fm_jq -r '.reply_max_chars // ""')
+  REQ_PLATFORM=$(printf '%s' "$REPLY_CONTEXT" | jq -r '.platform // ""')
+  REQ_EXPLICIT_MAX=$(printf '%s' "$REPLY_CONTEXT" | jq -r '.reply_max_chars // ""')
   REQ_REPLY_MAX=$REQ_EXPLICIT_MAX
 fi
 

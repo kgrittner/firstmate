@@ -104,7 +104,7 @@ else
   SPEC_JSON=$(cat)
 fi
 
-profiles_json=$(printf '%s\n' "$SPEC_JSON" | fm_jq -ec '
+profiles_json=$(printf '%s\n' "$SPEC_JSON" | jq -ec '
   (if type == "object" and has("use") then .use else . end)
   | if type == "array" then .
     elif type == "object" then [.]
@@ -112,11 +112,11 @@ profiles_json=$(printf '%s\n' "$SPEC_JSON" | fm_jq -ec '
     end
 ' 2>/dev/null) || { echo "error: dispatch input must be a rule, profile, or profile array" >&2; exit 2; }
 
-profile_count=$(printf '%s\n' "$profiles_json" | fm_jq 'length')
+profile_count=$(printf '%s\n' "$profiles_json" | jq 'length')
 [ "$profile_count" -gt 0 ] || { echo "error: dispatch profile array must not be empty" >&2; exit 2; }
 
 first_profile() {
-  printf '%s\n' "$profiles_json" | fm_jq -c '
+  printf '%s\n' "$profiles_json" | jq -c '
     def clean($p):
       {harness: $p.harness}
       + (if ($p.model? | type) == "string" then {model: $p.model} else {} end)
@@ -127,7 +127,7 @@ first_profile() {
 
 select_strategy=$SELECT_OVERRIDE
 if [ -z "$select_strategy" ]; then
-  select_strategy=$(printf '%s\n' "$SPEC_JSON" | fm_jq -r '
+  select_strategy=$(printf '%s\n' "$SPEC_JSON" | jq -r '
     if type == "object" and has("use") and (.select? | type) == "string" then .select else "" end
   ' 2>/dev/null || true)
 fi
@@ -162,13 +162,13 @@ else
   fi
 fi
 
-if ! printf '%s\n' "$quota_json" | fm_jq -e 'type == "object" and (.providers | type) == "array"' >/dev/null 2>&1; then
+if ! printf '%s\n' "$quota_json" | jq -e 'type == "object" and (.providers | type) == "array"' >/dev/null 2>&1; then
   log "quota-axi returned unparseable JSON; using first profile"
   first_profile
   exit 0
 fi
 
-selection=$(printf '%s\n' "$quota_json" | fm_jq -ec \
+selection=$(printf '%s\n' "$quota_json" | jq -ec \
   --argjson profiles "$profiles_json" \
   --argjson margin "$STALE_CLEAR_MARGIN" '
   def clean($p):
@@ -233,7 +233,7 @@ selection=$(printf '%s\n' "$quota_json" | fm_jq -ec \
   exit 0
 }
 
-if [ "$(printf '%s\n' "$selection" | fm_jq -r '.fallback')" = true ]; then
-  log "$(printf '%s\n' "$selection" | fm_jq -r '.reason'); using first profile"
+if [ "$(printf '%s\n' "$selection" | jq -r '.fallback')" = true ]; then
+  log "$(printf '%s\n' "$selection" | jq -r '.reason'); using first profile"
 fi
-printf '%s\n' "$selection" | fm_jq -c '.profile'
+printf '%s\n' "$selection" | jq -c '.profile'

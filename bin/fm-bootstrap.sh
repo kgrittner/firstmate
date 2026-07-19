@@ -657,11 +657,11 @@ crew_dispatch_validate() {
     echo "MISSING: jq (install: $(install_cmd jq))"
     return 0
   fi
-  if ! fm_jq -e . >/dev/null 2>&1 < "$file"; then
+  if ! jq -e . >/dev/null 2>&1 < "$file"; then
     echo "CREW_DISPATCH: invalid config/crew-dispatch.json - malformed JSON"
     return 0
   fi
-  err=$(fm_jq -r '
+  err=$(jq -r '
     def verified($h): ["claude","codex","opencode","pi","grok"] | index($h);
     def effort_ok($h; $e):
       if $e == null then true
@@ -715,7 +715,7 @@ crew_dispatch_validate() {
     return 0
   fi
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ]; then
-    fm_jq -r '
+    jq -r '
     def profile($p):
       ($p.harness | tostring)
       + (if ($p.model? != null) then "/" + ($p.model | tostring)
