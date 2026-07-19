@@ -274,10 +274,12 @@ pass "real herdr: send_literal + send_key Enter submit as two separate steps (ve
 fm_backend_herdr_send_text_line "$TARGET" "cd /tmp"
 sleep 0.3
 p=$(fm_backend_herdr_current_path "$TARGET") || fail "current_path failed"
-case "$p" in
-  */tmp) : ;;
-  *) fail "real herdr: current_path did not report the pane's cwd after cd /tmp, got '$p'" ;;
-esac
+# Canonicalize both sides (mirrors real_path_or_raw in bin/fm-spawn.sh): on Windows the pane
+# reports 'C:\...\Temp' and the sent 'cd /tmp' is a PowerShell no-op, but the tab was created
+# with --cwd /tmp so the assertion holds via the creation cwd; also handles macOS /private/tmp.
+p_canon=$(cd "$p" 2>/dev/null && pwd -P) || p_canon=$p
+tmp_canon=$(cd /tmp && pwd -P)
+[ "$p_canon" = "$tmp_canon" ] || fail "real herdr: current_path did not report the pane's cwd after cd /tmp, got '$p'"
 pass "real herdr: current_path reads the pane's live cwd"
 
 # --- busy_state on a real claude harness (verified in herdr-verification-p2.md) ---
