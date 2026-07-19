@@ -46,17 +46,19 @@
 # Sourcing is idempotent; this file only defines functions.
 
 # fm_jq_emits_crlf: succeed iff the resolved jq terminates raw output with
-# CRLF. The probe must inspect BYTES through od: Git Bash's `$(...)` trims a
-# TRAILING CRLF, so capturing jq's output directly would read clean even from
-# a CRLF-emitting jq (interior line endings, read loops, and multi-line
-# captures still carry the corrupting CRs - verified on winget jq 1.8.2).
-# A missing or broken jq probes clean: presence is the caller's own check, and
-# this probe must never convert "jq absent" into "jq incompatible".
+# CRLF. The probe must count BYTES: Git Bash's `$(...)` trims a TRAILING CRLF,
+# so capturing jq's output directly would read clean even from a CRLF-emitting
+# jq (interior line endings, read loops, and multi-line captures still carry
+# the corrupting CRs - verified on winget jq 1.8.2). `jq -rn '"x"'` can only
+# emit "x" plus the build's line terminator, so 3 bytes means CRLF and 2 means
+# LF. A missing or broken jq probes clean (0 bytes): presence is the caller's
+# own check, and this probe must never convert "jq absent" into
+# "jq incompatible".
 fm_jq_emits_crlf() {
-  local probe
+  local bytes
   command -v jq >/dev/null 2>&1 || return 1
-  probe=$(command jq -rn '"x"' 2>/dev/null | od -An -c | tr -d ' \n') || return 1
-  [ "$probe" = 'x\r\n' ]
+  bytes=$(command jq -rn '"x"' 2>/dev/null | wc -c) || return 1
+  [ "$bytes" -eq 3 ] 2>/dev/null
 }
 
 # fm_jq_resolve_mode: compute and export FM_JQ_MODE (plain|excl|excl-strip).
