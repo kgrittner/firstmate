@@ -14,24 +14,23 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
+# shellcheck source=bin/fm-proc-lib.sh
+. "$SCRIPT_DIR/fm-proc-lib.sh"
 
 fm_is_gate_agent "$FM_ROOT" && exit 0
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 
+# The lock may hold either an MSYS pid (POSIX platforms, test fixtures) or a
+# NATIVE Windows pid (fm-lock.sh's Windows fallback); fm_proc_pid_in_ancestry
+# answers "did this harness session already acquire it" for both spellings.
 lock_is_in_ancestry() {
-  local lock_pid pid=$$ _
+  local lock_pid
   [ -f "$STATE/.lock" ] || return 1
   IFS= read -r lock_pid < "$STATE/.lock" 2>/dev/null || return 1
   case "$lock_pid" in
     ''|*[!0-9]*|1) return 1 ;;
   esac
-  kill -0 "$lock_pid" 2>/dev/null || return 1
-  for _ in 1 2 3 4 5 6 7 8; do
-    [ "$pid" = "$lock_pid" ] && return 0
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-    [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
-  done
-  return 1
+  fm_proc_pid_in_ancestry "$lock_pid"
 }
 
 lock_is_in_ancestry && exit 0
