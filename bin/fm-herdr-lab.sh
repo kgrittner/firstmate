@@ -25,6 +25,11 @@
 # teardown requires that record to be identical afterward.
 set -u
 
+FM_HERDR_LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion; bin/fm-jq-lib.sh).
+# shellcheck source=bin/fm-jq-lib.sh
+. "$FM_HERDR_LAB_DIR/fm-jq-lib.sh"
+
 fm_herdr_lab_error() {
   echo "fm-herdr-lab: $*" >&2
 }

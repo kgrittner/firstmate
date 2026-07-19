@@ -8,6 +8,10 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion; bin/fm-jq-lib.sh).
+# shellcheck source=bin/fm-jq-lib.sh
+. "$SCRIPT_DIR/fm-jq-lib.sh"
+
 usage() {
   cat <<'EOF'
 usage: fm-fleet-view.sh [--json]

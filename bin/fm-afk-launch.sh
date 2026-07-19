@@ -57,6 +57,9 @@ FM_AFK_LAUNCH_WS_LABEL="firstmate-afk-daemon"
 . "$FM_AFK_LAUNCH_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-supervisor-target-lib.sh
 . "$FM_AFK_LAUNCH_DIR/fm-supervisor-target-lib.sh"
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion; bin/fm-jq-lib.sh).
+# shellcheck source=bin/fm-jq-lib.sh
+. "$FM_AFK_LAUNCH_DIR/fm-jq-lib.sh"
 # fm-afk-start.sh provides the daemon-lock liveness helpers and
 # fm_afk_clear_stale_artifacts; it is sourceable (BASH_SOURCE guard) and its
 # main does not run on source. It sets `set -eu`, so turn errexit back off for

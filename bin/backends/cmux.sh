@@ -120,6 +120,10 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-composer-lib.sh
 . "$FM_BACKEND_CMUX_ROOT/bin/fm-composer-lib.sh"
 
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion; bin/fm-jq-lib.sh).
+# shellcheck source=bin/fm-jq-lib.sh
+. "$FM_BACKEND_CMUX_ROOT/bin/fm-jq-lib.sh"
+
 # Verified minimum: the version the live pass ran against (docs/cmux-backend.md).
 FM_BACKEND_CMUX_MIN_MAJOR=0
 FM_BACKEND_CMUX_MIN_MINOR=64

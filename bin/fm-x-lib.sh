@@ -54,6 +54,12 @@ if ! declare -F fm_pr_mode_check >/dev/null; then
   . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/fm-pr-lib.sh"
 fi
 
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion; bin/fm-jq-lib.sh).
+# Sourcing here also provides it to every fm-x-*.sh consumer of this library.
+FM_X_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-jq-lib.sh
+. "$FM_X_LIB_DIR/fm-jq-lib.sh"
+
 # Read the value of KEY from a .env-style file: last assignment wins; tolerates a
 # leading "export ", surrounding whitespace, and one layer of matching single or
 # double quotes. Prints nothing (and succeeds) when the file or key is absent, so
@@ -390,7 +396,7 @@ fmx_context_registry_recorded_at() {
     | if type == "number" and floor == . and . >= 0 then tostring
       elif type == "string" and test("^[0-9]+$") then .
       else "" end
-  ' "$file" 2>/dev/null) || recorded_at=
+  ' 2>/dev/null < "$file") || recorded_at=
   case "$recorded_at" in
     ''|*[!0-9]*) recorded_at= ;;
   esac
@@ -507,7 +513,7 @@ fmx_context_registry_get() {
     return 0
   fi
   fmx_context_registry_prune "$state"
-  jq -c '{platform:(.platform // ""), reply_max_chars:(.reply_max_chars // "")}' "$file" 2>/dev/null \
+  jq -c '{platform:(.platform // ""), reply_max_chars:(.reply_max_chars // "")}' 2>/dev/null < "$file" \
     || printf '{"platform":"","reply_max_chars":""}\n'
 }
 
@@ -752,10 +758,10 @@ fmx_reply_payload_json() {
   local rid=$1 chunks=$2 n=$3 image_json_file=${4:-}
   if [ -n "$image_json_file" ]; then
     if [ "$n" -le 1 ]; then
-      printf '%s' "$chunks" | jq -c --arg rid "$rid" --slurpfile image "$image_json_file" \
+      printf '%s' "$chunks" | jq -c --arg rid "$rid" --slurpfile image "$(fm_jq_path "$image_json_file")" \
         '{request_id:$rid, text:(.[0] // ""), image:$image[0]}'
     else
-      printf '%s' "$chunks" | jq -c --arg rid "$rid" --slurpfile image "$image_json_file" \
+      printf '%s' "$chunks" | jq -c --arg rid "$rid" --slurpfile image "$(fm_jq_path "$image_json_file")" \
         '{request_id:$rid, text:.[0], texts:., image:$image[0]}'
     fi
   else

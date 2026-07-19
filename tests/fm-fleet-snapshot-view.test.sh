@@ -12,6 +12,12 @@ TMP_ROOT=$(fm_test_tmproot fm-fleet-snapshot)
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
+# Assertions go through the sourced jq() shim (bin/fm-jq-lib.sh) so a path handed to --arg
+# keeps its POSIX spelling on Windows exactly like the snapshot side does;
+# a bare jq assertion would MSYS-convert the needle and never match.
+# shellcheck source=bin/fm-jq-lib.sh disable=SC1091
+. "$ROOT/bin/fm-jq-lib.sh"
+
 make_fakebin() {  # <dir>
   local fb
   fb=$(fm_fakebin "$1")

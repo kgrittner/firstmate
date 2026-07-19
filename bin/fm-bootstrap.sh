@@ -54,6 +54,10 @@
 #          tasks-axi default backend is silent. quota-axi is required because
 #          crew-dispatch quota-balanced may call it; fm-dispatch-select.sh still
 #          degrades at runtime when quota data is unavailable.
+#          jq is also MISSING_MANUAL when the installed build terminates output
+#          lines with CRLF (native Windows jq): fm scripts stay defended through
+#          fm_jq (bin/fm-jq-lib.sh), but everything not routed through it is
+#          exposed, so the incompatible build is reported loudly.
 #          X mode is OPTIONAL and inert unless FM_HOME/.env has a non-empty
 #          FMX_PAIRING_TOKEN. When opted in, bootstrap requires curl+jq, writes
 #          the relay poll shim and 30s cadence config, and prints an FMX line.
@@ -88,6 +92,9 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+# fm_jq: the repo-owned jq defense (Windows CRLF/path-conversion; bin/fm-jq-lib.sh).
+# shellcheck source=bin/fm-jq-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-jq-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-tangle-lib.sh disable=SC1091
@@ -642,7 +649,7 @@ crew_dispatch_validate() {
     echo "MISSING: jq (install: $(install_cmd jq))"
     return 0
   fi
-  if ! jq -e . "$file" >/dev/null 2>&1; then
+  if ! jq -e . >/dev/null 2>&1 < "$file"; then
     echo "CREW_DISPATCH: invalid config/crew-dispatch.json - malformed JSON"
     return 0
   fi
@@ -694,7 +701,7 @@ crew_dispatch_validate() {
         else empty
         end
     end
-  ' "$file" 2>/dev/null || true)
+  ' 2>/dev/null < "$file" || true)
   if [ -n "$err" ]; then
     echo "CREW_DISPATCH: invalid config/crew-dispatch.json - $err"
     return 0
@@ -717,7 +724,7 @@ crew_dispatch_validate() {
       + [(.rules // [])[]? | "BOOTSTRAP_INFO: crew dispatch rule: " + (.when | tostring) + " -> " + use_label(.)]
       + (if (.default? | type) == "object" then ["BOOTSTRAP_INFO: crew dispatch default: " + profile(.default)] else [] end))
     | .[]
-  ' "$file"
+  ' < "$file"
   fi
 }
 
@@ -755,6 +762,14 @@ done
 for t in $COMMON_TOOLS; do
   command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
 done
+# jq line-ending integrity: a native Windows jq (e.g. winget jq 1.8.2) emits
+# CRLF on every output line, corrupting each value any `jq -r` consumer parses.
+# fm scripts stay defended through fm_jq (bin/fm-jq-lib.sh), but crewmate
+# project work and every other tool on this PATH remain exposed, so an
+# installed-but-CRLF jq is loud, like the other incompatible builds above.
+if command -v jq >/dev/null 2>&1 && fm_jq_emits_crlf; then
+  echo "MISSING_MANUAL: jq (instructions: the installed jq terminates output lines with CRLF and corrupts parsed values; replace it with a build that emits plain LF, e.g. an MSYS2/pacman jq on Windows - firstmate's own scripts stay defended by bin/fm-jq-lib.sh meanwhile)"
+fi
 # The treehouse lease-support upgrade check is only relevant when the resolved
 # backend actually requires treehouse (every backend except orca, which owns its
 # own worktrees); an orca home must not be told to upgrade a provider it never uses.

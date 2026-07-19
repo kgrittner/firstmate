@@ -786,8 +786,45 @@ ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"
 }
 
+# A jq that is PRESENT but emits CRLF line endings (native Windows jq) must be
+# reported loudly as an incompatible build; a clean-LF jq stays silent. The
+# probe is byte-level (bin/fm-jq-lib.sh fm_jq_emits_crlf), so the fake jq only
+# needs to reproduce the line terminator.
+test_crlf_emitting_jq_is_reported_as_incompatible() {
+  local case_dir fakebin out expect
+  expect="MISSING_MANUAL: jq (instructions: the installed jq terminates output lines with CRLF and corrupts parsed values; replace it with a build that emits plain LF, e.g. an MSYS2/pacman jq on Windows - firstmate's own scripts stay defended by bin/fm-jq-lib.sh meanwhile)"
+
+  case_dir="$TMP_ROOT/jq-crlf"
+  mkdir -p "$case_dir/home"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  cat > "$fakebin/jq" <<'SH'
+#!/usr/bin/env bash
+printf 'x\r\n'
+SH
+  chmod +x "$fakebin/jq"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  printf '%s\n' "$out" | grep -Fx "$expect" >/dev/null \
+    || fail "CRLF-emitting jq must be reported as incompatible (got: $out)"
+
+  case_dir="$TMP_ROOT/jq-clean"
+  mkdir -p "$case_dir/home"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  cat > "$fakebin/jq" <<'SH'
+#!/usr/bin/env bash
+printf 'x\n'
+SH
+  chmod +x "$fakebin/jq"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  printf '%s\n' "$out" | grep -F 'MISSING_MANUAL: jq' >/dev/null \
+    && fail "a clean-LF jq must not be reported (got: $out)"
+  pass "bootstrap reports a CRLF-emitting jq loudly and leaves a clean jq silent"
+}
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
+test_crlf_emitting_jq_is_reported_as_incompatible
 test_git_is_required_with_supported_install_instruction
 test_orca_backend_gates_orca_tool_only_when_selected
 test_session_provider_backends_do_not_require_tmux

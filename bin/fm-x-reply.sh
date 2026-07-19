@@ -336,7 +336,7 @@ case "$code" in
   409)
     if [ "$FOLLOWUP" = 1 ]; then
       if [ -s "$RESPONSE_BODY_FILE" ] && {
-        jq -e '.error == "followup_unavailable"' "$RESPONSE_BODY_FILE" >/dev/null 2>&1 ||
+        jq -e '.error == "followup_unavailable"' >/dev/null 2>&1 < "$RESPONSE_BODY_FILE" ||
           grep -F 'followup_unavailable' "$RESPONSE_BODY_FILE" >/dev/null 2>&1
       }; then
         echo "fm-x-reply: relay rejected the follow-up (confirmed followup_unavailable marker): HTTP 409" >&2

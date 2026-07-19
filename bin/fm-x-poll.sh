@@ -83,7 +83,7 @@ case "$code" in
 esac
 [ -s "$BODY_FILE" ] || { clear_error; exit 0; }
 
-REQ=$(jq -r '.request_id // empty' "$BODY_FILE" 2>/dev/null) || exit 0
+REQ=$(jq -r '.request_id // empty' 2>/dev/null < "$BODY_FILE") || exit 0
 [ -n "$REQ" ] || { clear_error; exit 0; }
 
 # A pending mention only reaches the agent when it has non-empty text.
@@ -91,7 +91,7 @@ REQ=$(jq -r '.request_id // empty' "$BODY_FILE" 2>/dev/null) || exit 0
 # stashed here and deliberately skipped there.
 # Empty/absent/null text must not stash an inbox file or wake a public X flow for
 # nothing - stay inert (exit 0).
-TEXT=$(jq -r '(.text // "") | gsub("[[:space:]]+"; " ") | gsub("^ +| +$"; "")' "$BODY_FILE" 2>/dev/null) || exit 0
+TEXT=$(jq -r '(.text // "") | gsub("[[:space:]]+"; " ") | gsub("^ +| +$"; "")' 2>/dev/null < "$BODY_FILE") || exit 0
 [ -n "$TEXT" ] || { clear_error; exit 0; }
 
 # Defend the inbox filename: request_id is relay-issued (e.g. "req-7"), but never
@@ -103,7 +103,7 @@ esac
 INBOX="$STATE/x-inbox"
 # Stash the full mention object atomically so a concurrent reader never sees a
 # half-written file.
-if ! (set -o pipefail; jq '.' "$BODY_FILE" 2>/dev/null \
+if ! (set -o pipefail; jq '.' 2>/dev/null < "$BODY_FILE" \
   | fmx_private_artifact_publish_stdin "$INBOX" "$REQ.json" 600); then
   emit_error_once "cannot write inbox"
   exit 0
