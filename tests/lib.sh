@@ -36,8 +36,11 @@ export FM_GATE_REFUSE_BYPASS=1
 
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
+# pwd -P: on Windows (Git Bash) the logical pwd can inherit a C:/-style form
+# from the launching shell, while child scripts under bin/ resolve their own
+# root as /c/-style; the physical form keeps literal path comparisons stable.
 # shellcheck disable=SC2034
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 # --- reporters --------------------------------------------------------------
 
