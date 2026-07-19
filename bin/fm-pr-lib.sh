@@ -100,6 +100,59 @@ fm_pr_file_device() {
   fi
 }
 
+# Exact-mode gates (0600/0700) assume chmod is enforceable. On MSYS/Git Bash
+# noacl mounts chmod is cosmetic: stat synthesizes the mode from the reading
+# process's umask plus content sniffing (a shebang file reads as executable),
+# so an exact-mode gate would fail permanently and disable PR polling, custom
+# checks, quarantine handling, and X mode outright. Detect that once per
+# process - Windows uname plus a chmod round-trip probe - and only on such a
+# filesystem accept the mode check with a single logged notice. Every other
+# private-file validation (regular file, link count, device, content) stays
+# fully enforced, and platforms with enforceable modes keep the exact check.
+# The probe chmods the same file to two different modes and compares the
+# readings: a mode-storing filesystem reports two values, a synthesizing one
+# reports the same value twice regardless of the ambient umask.
+FM_PR_MODE_UNENFORCEABLE=
+FM_PR_MODE_NOTICE_PRINTED=
+fm_pr_mode_unenforceable() {
+  local probe first second
+  if [ -z "$FM_PR_MODE_UNENFORCEABLE" ]; then
+    FM_PR_MODE_UNENFORCEABLE=no
+    case "$(uname)" in
+      MINGW*|MSYS*)
+        probe=$(mktemp "${TMPDIR:-/tmp}/.fm-mode-probe.XXXXXX" 2>/dev/null) || probe=
+        if [ -n "$probe" ]; then
+          if chmod 0600 "$probe" 2>/dev/null; then
+            first=$(fm_pr_file_mode "$probe")
+            if [ -n "$first" ] && chmod 0640 "$probe" 2>/dev/null; then
+              second=$(fm_pr_file_mode "$probe")
+              [ "$first" != "$second" ] || FM_PR_MODE_UNENFORCEABLE=yes
+            fi
+          fi
+          rm -f -- "$probe"
+        fi
+        ;;
+    esac
+  fi
+  [ "$FM_PR_MODE_UNENFORCEABLE" = yes ] || return 1
+  if [ -z "$FM_PR_MODE_NOTICE_PRINTED" ]; then
+    FM_PR_MODE_NOTICE_PRINTED=1
+    echo "notice: exact file modes are not enforceable on this filesystem (noacl); accepting mode checks while keeping all other private-file validations" >&2
+  fi
+}
+
+# fm_pr_mode_check <path> <expected-mode> - the one shared exact-mode gate.
+# Passes when the path's mode matches, or when modes are provably
+# unenforceable on this platform (see fm_pr_mode_unenforceable). Fails when
+# the mode cannot be read at all.
+fm_pr_mode_check() {
+  local path=$1 expected=$2 actual
+  actual=$(fm_pr_file_mode "$path") || return 1
+  [ -n "$actual" ] || return 1
+  [ "$actual" = "$expected" ] && return 0
+  fm_pr_mode_unenforceable
+}
+
 fm_pr_file_link_count() {
   if [ "$(uname)" = Darwin ]; then
     stat -f %l "$1" 2>/dev/null
@@ -137,7 +190,7 @@ fm_pr_sha256() {
 fm_pr_private_file_valid() {
   local path=$1 mode=$2 device=$3
   [ -f "$path" ] && [ ! -L "$path" ] || return 1
-  [ "$(fm_pr_file_mode "$path")" = "$mode" ] || return 1
+  fm_pr_mode_check "$path" "$mode" || return 1
   [ "$(fm_pr_file_device "$path")" = "$device" ] || return 1
   [ "$(fm_pr_file_link_count "$path")" = 1 ]
 }

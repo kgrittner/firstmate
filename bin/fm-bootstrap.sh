@@ -491,23 +491,15 @@ no_mistakes_compatible() {
 }
 
 x_mode_write_if_changed() {
-  local dest=$1 content=$2 mode=$3 parent tmp parent_device current_mode
+  local dest=$1 content=$2 mode=$3 parent tmp parent_device
   parent=${dest%/*}
   [ "$parent" != "$dest" ] || return 1
   [ -d "$parent" ] && [ ! -L "$parent" ] || return 1
-  if [ "$(uname)" = Darwin ]; then
-    parent_device=$(stat -f %d "$parent" 2>/dev/null) || return 1
-  else
-    parent_device=$(stat -c %d "$parent" 2>/dev/null) || return 1
-  fi
+  parent_device=$(fm_pr_file_device "$parent") || return 1
+  [ -n "$parent_device" ] || return 1
   if [ -e "$dest" ] || [ -L "$dest" ]; then
     fmx_single_link_file_valid "$dest" "$parent_device" || return 1
-    if [ "$(uname)" = Darwin ]; then
-      current_mode=$(stat -f %Lp "$dest" 2>/dev/null) || return 1
-    else
-      current_mode=$(stat -c %a "$dest" 2>/dev/null) || return 1
-    fi
-    if [ "$current_mode" = "$mode" ] && cmp -s "$dest" <(printf '%s\n' "$content"); then
+    if fm_pr_mode_check "$dest" "$mode" && cmp -s "$dest" <(printf '%s\n' "$content"); then
       return 0
     fi
   fi

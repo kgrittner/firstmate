@@ -35,9 +35,11 @@ FM_TEST_LIB_SOURCED=1
 export FM_GATE_REFUSE_BYPASS=1
 
 # Resolve the repo root from this library's own location. Consumed by sourcing
-# test files, not by this library, so it reads as "unused" here.
+# test files, not by this library, so it reads as "unused" here. pwd -P keeps
+# the result canonical even when the launching environment carries a
+# non-canonical logical $PWD (e.g. a Windows drive-letter spelling).
 # shellcheck disable=SC2034
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 # --- reporters --------------------------------------------------------------
 
@@ -185,6 +187,27 @@ assert_not_contains() {
     *"$2"*) fail "$3 (unexpected: '$2')"$'\n'"--- output ---"$'\n'"$1" ;;
     *) : ;;
   esac
+}
+
+# fm_test_modes_enforceable: succeed when exact file permission modes are real
+# on this filesystem. On mode-synthesizing filesystems (MSYS noacl mounts)
+# chmod is cosmetic and bin/fm-pr-lib.sh deliberately accepts exact-mode gates
+# there, so both exact-mode assertions and chmod-based negative fixtures are
+# unverifiable. Guard such an assertion or case with this helper and report it
+# as a skipped pass; on POSIX the guard always passes and coverage is unchanged.
+fm_test_modes_enforceable() {
+  if [ -z "${FM_TEST_MODES_ENFORCEABLE:-}" ]; then
+    if ! declare -F fm_pr_mode_unenforceable >/dev/null; then
+      # shellcheck source=bin/fm-pr-lib.sh disable=SC1091
+      . "$ROOT/bin/fm-pr-lib.sh"
+    fi
+    if fm_pr_mode_unenforceable 2>/dev/null; then
+      FM_TEST_MODES_ENFORCEABLE=no
+    else
+      FM_TEST_MODES_ENFORCEABLE=yes
+    fi
+  fi
+  [ "$FM_TEST_MODES_ENFORCEABLE" = yes ]
 }
 
 # expect_code <expected> <actual> <label>
