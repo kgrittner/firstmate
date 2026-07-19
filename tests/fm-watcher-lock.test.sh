@@ -69,6 +69,9 @@ test_stale_watch_lock_reclaimed() {
   done
   mkdir "$state/.watch.lock"
   printf '%s\n' "$dead_pid" > "$state/.watch.lock/pid"
+  # A crashed watcher's lock is old in reality; age it past the freshness
+  # grace so the reclaim is legitimate.
+  touch -t 200001010000 "$state/.watch.lock"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
   i=0
@@ -168,31 +171,67 @@ test_guard_warnings() {
   pass "guard banner leads when down with pending wakes (re-arm-after-drain) and stays silent when fresh"
 }
 
+# Shared contender pool for the two single-winner concurrency tests. Every
+# contender records its attempt in $attempted; a winner also records its pid in
+# $marker and then HOLDS the lock until $release exists (bounded), so the held
+# lock names a live pid for every other contender's attempt. A fixed sleep is
+# not enough: on slow-spawn platforms (MSYS fork storms) launching 40
+# contenders outlives any short hold, and a late contender then legitimately
+# reclaims a genuinely dead, genuinely old lock. Spawned pids land in the
+# CONTENDER_PIDS global (a command-substitution return would make the capture
+# pipe block on the background jobs).
+CONTENDER_PIDS=
+spawn_lock_contenders() {
+  local state=$1 lockdir=$2 marker=$3 attempted=$4 release=$5 count=$6 i
+  CONTENDER_PIDS=
+  i=1
+  while [ "$i" -le "$count" ]; do
+    FM_STATE_OVERRIDE="$state" bash -c '
+      . "$1"
+      if fm_lock_try_acquire "$2"; then
+        printf "%s\n" "${BASHPID:-$$}" >> "$3"
+        printf "done\n" >> "$4"
+        # Coarse poll: each sleep is a process fork on MSYS, so a tight loop
+        # here would starve the still-spawning contenders.
+        i=0
+        while [ ! -e "$5" ] && [ "$i" -lt 120 ]; do
+          sleep 1
+          i=$((i + 1))
+        done
+      else
+        printf "done\n" >> "$4"
+      fi
+    ' _ "$LIB" "$lockdir" "$marker" "$attempted" "$release" &
+    CONTENDER_PIDS="$CONTENDER_PIDS $!"
+    i=$((i + 1))
+  done
+}
+
+await_lock_contenders() {
+  local attempted=$1 release=$2 count=$3 i pid attempts
+  i=0
+  while [ "$i" -lt 240 ]; do
+    attempts=$(awk 'NF { c++ } END { print c + 0 }' "$attempted" 2>/dev/null)
+    [ "${attempts:-0}" -ge "$count" ] && break
+    sleep 0.5
+    i=$((i + 1))
+  done
+  [ "${attempts:-0}" -ge "$count" ] || fail "only ${attempts:-0}/$count lock contenders finished attempting"
+  : > "$release"
+  for pid in $CONTENDER_PIDS; do
+    wait "$pid" 2>/dev/null || true
+  done
+}
+
 test_lock_single_winner_under_concurrency() {
-  local dir state lockdir marker i pids pid wins
+  local dir state lockdir marker wins
   dir=$(make_case lock-concurrency)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   marker="$dir/wins"
   : > "$marker"
-  pids=
-  i=1
-  while [ "$i" -le 40 ]; do
-    FM_STATE_OVERRIDE="$state" bash -c '
-      . "$1"
-      if fm_lock_try_acquire "$2"; then
-        printf "%s\n" "$$" >> "$3"
-        # Stay alive so the held lock names a live pid for the whole window;
-        # otherwise a late contender could legitimately reclaim a dead-pid lock.
-        sleep 1
-      fi
-    ' _ "$LIB" "$lockdir" "$marker" &
-    pids="$pids $!"
-    i=$((i + 1))
-  done
-  for pid in $pids; do
-    wait "$pid" 2>/dev/null || true
-  done
+  spawn_lock_contenders "$state" "$lockdir" "$marker" "$dir/attempted" "$dir/release" 40
+  await_lock_contenders "$dir/attempted" "$dir/release" 40
   wins=$(awk 'NF { c++ } END { print c + 0 }' "$marker")
   [ "$wins" -eq 1 ] || fail "expected exactly one lock winner under concurrency, got $wins"
   pass "concurrent fm_lock_try_acquire yields exactly one winner"
@@ -206,6 +245,9 @@ test_lock_steals_dead_pid_lock() {
   dead=$(dead_pid)
   mkdir "$lockdir"
   printf '%s\n' "$dead" > "$lockdir/pid"
+  # Age the lock past the freshness grace: a fresh lock is never stealable,
+  # whatever its pid says.
+  touch -t 200001010000 "$lockdir"
   rc=0
   newpid=$(FM_STATE_OVERRIDE="$state" bash -c '
     . "$1"
@@ -218,7 +260,7 @@ test_lock_steals_dead_pid_lock() {
 }
 
 test_lock_stale_steal_single_winner_under_concurrency() {
-  local dir state lockdir dead marker i pids pid wins
+  local dir state lockdir dead marker wins
   dir=$(make_case lock-stale-concurrency)
   state="$dir/state"
   lockdir="$state/.contend.lock"
@@ -226,23 +268,10 @@ test_lock_stale_steal_single_winner_under_concurrency() {
   dead=$(dead_pid)
   mkdir "$lockdir"
   printf '%s\n' "$dead" > "$lockdir/pid"
+  touch -t 200001010000 "$lockdir"
   : > "$marker"
-  pids=
-  i=1
-  while [ "$i" -le 40 ]; do
-    FM_STATE_OVERRIDE="$state" bash -c '
-      . "$1"
-      if fm_lock_try_acquire "$2"; then
-        printf "%s\n" "${BASHPID:-$$}" >> "$3"
-        sleep 1
-      fi
-    ' _ "$LIB" "$lockdir" "$marker" &
-    pids="$pids $!"
-    i=$((i + 1))
-  done
-  for pid in $pids; do
-    wait "$pid" 2>/dev/null || true
-  done
+  spawn_lock_contenders "$state" "$lockdir" "$marker" "$dir/attempted" "$dir/release" 40
+  await_lock_contenders "$dir/attempted" "$dir/release" 40
   wins=$(awk 'NF { c++ } END { print c + 0 }' "$marker")
   [ "$wins" -eq 1 ] || fail "expected exactly one stale-lock stealer, got $wins"
   pass "concurrent stale-lock steal yields exactly one winner"
@@ -257,13 +286,23 @@ test_lock_live_steal_mutex_is_not_reclaimed() {
   dead=$(dead_pid)
   mkdir "$lockdir"
   printf '%s\n' "$dead" > "$lockdir/pid"
+  # Age the primary lock so the refusal below exercises the live steal mutex,
+  # not the numeric-pid freshness grace.
+  touch -t 200001010000 "$lockdir"
+  # The holder keeps the mutex until released, not for a fixed sleep: on
+  # slow-spawn platforms the contender's process startup can outlast any short
+  # hold, making the eventual steal legitimate and the assertion meaningless.
   FM_STATE_OVERRIDE="$state" bash -c '
     . "$1"
     fm_lock_try_acquire "$2.steal" || exit 7
     printf "%s\n" "${BASHPID:-$$}" > "$3"
-    sleep 2
+    i=0
+    while [ ! -e "$4" ] && [ "$i" -lt 60 ]; do
+      sleep 1
+      i=$((i + 1))
+    done
     fm_lock_release "$2.steal"
-  ' _ "$LIB" "$lockdir" "$holder_file" &
+  ' _ "$LIB" "$lockdir" "$holder_file" "$dir/release" &
   holder=$!
   i=0
   while [ "$i" -lt 50 ] && [ ! -s "$holder_file" ]; do
@@ -276,6 +315,7 @@ test_lock_live_steal_mutex_is_not_reclaimed() {
     if fm_lock_try_acquire "$2"; then rc=0; else rc=1; fi
     printf "rc=%s held=%s lockpid=%s stealpid=%s\n" "$rc" "${FM_LOCK_HELD_PID:-}" "$(cat "$2/pid" 2>/dev/null || true)" "$(cat "$2.steal/pid" 2>/dev/null || true)"
   ' _ "$LIB" "$lockdir")
+  : > "$dir/release"
   wait "$holder" || fail "live steal mutex holder failed"
   case "$out" in
     *"rc=1"*) ;;
@@ -322,9 +362,11 @@ test_lock_empty_pid_uses_minimum_grace() {
   dir=$(make_case lock-empty-grace)
   state="$dir/state"
   lockdir="$state/.contend.lock"
-  mkdir "$lockdir"
+  # Create the fresh lock inside the contender process: creating it out here
+  # would let slow process startup age it past the minimum freshness grace.
   out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
     . "$1"
+    mkdir "$2" || exit 20
     if fm_lock_try_acquire "$2"; then rc=0; else rc=1; fi
     printf "rc=%s held=%s\n" "$rc" "${FM_LOCK_HELD_PID:-}"
   ' _ "$LIB" "$lockdir")
@@ -335,6 +377,110 @@ test_lock_empty_pid_uses_minimum_grace() {
   [ -d "$lockdir" ] || fail "empty mid-acquire lock dir was removed during grace"
   [ ! -e "$lockdir/pid" ] || fail "empty mid-acquire lock gained a pid during grace"
   pass "empty mid-acquire lock keeps a minimum grace"
+}
+
+test_lock_numeric_pid_fresh_lock_is_not_stolen() {
+  # A just-created lock naming a pid that fails the liveness probe must NOT be
+  # stolen inside the freshness grace: on MSYS a just-forked holder's kill -0
+  # can momentarily false-negative, and stealing on that reading produced 2
+  # winners under the 40-contender concurrency test. FM_LOCK_STALE_AFTER=0
+  # additionally proves the minimum grace clamp applies to numeric pids too.
+  local dir state lockdir dead out lockpid
+  dir=$(make_case lock-numeric-grace)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  dead=$(dead_pid)
+  # Create the fresh lock inside the contender process: creating it out here
+  # would let slow process startup age it past the minimum freshness grace.
+  out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    mkdir "$2" || exit 20
+    printf "%s\n" "$3" > "$2/pid" || exit 21
+    if fm_lock_try_acquire "$2"; then rc=0; else rc=1; fi
+    printf "rc=%s held=%s\n" "$rc" "${FM_LOCK_HELD_PID:-}"
+  ' _ "$LIB" "$lockdir" "$dead")
+  case "$out" in
+    *"rc=1"*) ;;
+    *) fail "fresh numeric-pid lock was stolen despite failing liveness probe: $out" ;;
+  esac
+  case "$out" in
+    *"held=$dead"*) ;;
+    *) fail "fresh numeric-pid holder not reported via FM_LOCK_HELD_PID: $out" ;;
+  esac
+  lockpid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  [ "$lockpid" = "$dead" ] || fail "fresh numeric-pid lock was clobbered during grace (got '$lockpid')"
+  pass "fresh numeric-pid lock keeps the freshness grace when the liveness probe fails"
+}
+
+test_lock_steal_of_steal_is_bounded() {
+  # A steal lock never gets its own steal: acquiring a held-stale .steal must
+  # fail in bounded time without ever creating .steal.steal (the unbounded
+  # recursion hung session start for an hour on Windows when symlink creation
+  # always failed), and a primary acquire behind that abandoned stale steal
+  # must fail bounded too instead of recursing.
+  local dir state lockdir dead rc
+  dir=$(make_case lock-steal-bound)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  dead=$(dead_pid)
+  mkdir "$lockdir.steal"
+  printf '%s\n' "$dead" > "$lockdir.steal/pid"
+  touch -t 200001010000 "$lockdir.steal"
+  rc=0
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_try_acquire "$2.steal"
+  ' _ "$LIB" "$lockdir" || rc=$?
+  [ "$rc" -ne 0 ] || fail "held-stale steal lock was acquired through a steal-of-steal"
+  { [ ! -e "$lockdir.steal.steal" ] && [ ! -L "$lockdir.steal.steal" ]; } \
+    || fail "steal acquire recursed onto .steal.steal"
+  rc=0
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_try_acquire "$2"
+  ' _ "$LIB" "$lockdir" || rc=$?
+  [ "$rc" -ne 0 ] || fail "primary acquire succeeded behind an abandoned stale steal lock"
+  { [ ! -e "$lockdir.steal.steal" ] && [ ! -L "$lockdir.steal.steal" ]; } \
+    || fail "primary acquire recursed onto .steal.steal"
+  pass "steal recursion is bounded to one level and never creates .steal.steal"
+}
+
+test_lock_symlink_unavailable_fails_bounded_and_loud() {
+  # When symlink creation cannot work (Windows nativestrict without Developer
+  # Mode; default MSYS deep-copy), acquires must fail in bounded time with
+  # remediation text - not loop or recurse - and the self-test must be
+  # memoized so the message prints once per process.
+  local dir state fakebin lockdir out err pid status
+  dir=$(make_case lock-no-symlink)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  lockdir="$state/.contend.lock"
+  out="$dir/acquire.out"
+  err="$dir/acquire.err"
+  cat > "$fakebin/ln" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$fakebin/ln"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_acquire_wait "$2"; rc_wait=$?
+    if fm_lock_try_acquire "$2"; then rc_try=0; else rc_try=1; fi
+    printf "rc_wait=%s rc_try=%s\n" "$rc_wait" "$rc_try"
+  ' _ "$LIB" "$lockdir" > "$out" 2> "$err" &
+  pid=$!
+  wait_for_exit "$pid" 100
+  status=$?
+  [ "$status" -ne 124 ] || fail "acquire looped instead of failing bounded without symlinks"
+  grep -qF 'rc_wait=1' "$out" || fail "fm_lock_acquire_wait did not give up without symlinks: $(cat "$out")"
+  grep -qF 'rc_try=1' "$out" || fail "fm_lock_try_acquire did not fail without symlinks: $(cat "$out")"
+  grep -qF 'symlink self-test failed' "$err" || fail "no loud symlink self-test failure: $(cat "$err")"
+  grep -qF 'Developer Mode' "$err" || fail "remediation text missing Developer Mode hint: $(cat "$err")"
+  grep -qF 'MSYS=winsymlinks:nativestrict' "$err" || fail "remediation text missing MSYS hint: $(cat "$err")"
+  [ "$(grep -cF 'symlink self-test failed' "$err")" -eq 1 ] \
+    || fail "symlink self-test was not memoized (message printed more than once): $(cat "$err")"
+  { [ ! -e "$lockdir" ] && [ ! -L "$lockdir" ]; } || fail "a lock materialized despite failing symlinks"
+  pass "acquires fail bounded and loud, once, when symlinks are unavailable"
 }
 
 test_lock_late_claim_loses_after_recreate() {
@@ -412,18 +558,19 @@ test_watch_restart_rejects_reused_pid() {
   printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
   printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
   printf '%s\n' "stale watcher identity" > "$state/.watch.lock/pid-identity"
-  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" --restart > "$out" &
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=60 "$WATCH_ARM" --restart > "$out" &
   pid=$!
   # The honest arm forks the fresh watcher as a tracked child and waits on it, so
   # the lock now names that child, not the arm invocation. The property is the
   # same: the stale reused-pid lock is replaced by a genuinely live watcher, which
   # the arm confirms before reporting it. Wait for that confirmation, not just for
-  # the lock pid to appear (identity and beacon land a beat later).
-  i=0
-  while [ "$i" -lt 80 ]; do
+  # the lock pid to appear (identity and beacon land a beat later). Wall-clock
+  # deadline, not an iteration count: on slow-fork platforms watcher boot plus
+  # arm confirmation takes 15s+, and per-iteration cost is unpredictable.
+  i=$(( $(date +%s) + 90 ))
+  while [ "$(date +%s)" -lt "$i" ]; do
     grep -qF 'watcher: started pid=' "$out" 2>/dev/null && break
-    sleep 0.1
-    i=$((i + 1))
+    sleep 0.5
   done
   lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
   { [ -n "$lock_pid" ] && [ "$lock_pid" != "$live" ] && kill -0 "$lock_pid" 2>/dev/null; } \
@@ -443,7 +590,10 @@ test_watch_restart_reports_healthy_peer_without_attaching() {
   fakebin="$dir/fakebin"
   out="$dir/restart.out"
   mark_pr_check_migration_complete "$state"
-  node -e 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 300000)' &
+  # The TERM-resistant peer must be a shell process, not a native binary: on
+  # MSYS, kill -TERM hard-terminates native processes regardless of their
+  # signal handlers, and the "peer refuses to die" premise silently vanishes.
+  bash -c 'trap "" TERM; sleep 300' &
   peer=$!
   identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || fail "could not identify peer pid"
   mkdir "$state/.watch.lock"
@@ -483,7 +633,7 @@ test_watcher_self_evicts_on_lock_takeover() {
   # Simulate a second watcher taking over the singleton lock. $$ (the test
   # runner) is a live pid that is not the watcher.
   printf '%s\n' "$$" > "$state/.watch.lock/pid"
-  wait_for_exit "$pid" 60 || fail "watcher did not self-evict after lock takeover"
+  wait_for_exit "$pid" 300 || fail "watcher did not self-evict after lock takeover"
   lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
   [ "$lock_pid" = "$$" ] || fail "self-evicting watcher clobbered the new holder's lock (got '$lock_pid')"
   pass "watcher self-evicts when the lock pid no longer names it"
@@ -550,14 +700,17 @@ test_arm_starts_and_self_heals() {
       printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
       printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
       printf '%s\n' "dead watcher identity" > "$state/.watch.lock/pid-identity"
+      # Age the dead lock past the freshness grace so the fresh watcher child
+      # can steal it, as it could from a genuinely old crashed-watcher lock.
+      touch -t 200001010000 "$state/.watch.lock"
       touch "$state/.last-watcher-beat"
     fi
-    PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+    PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=60 "$WATCH_ARM" > "$armout" &
     armpid=$!
-    i=0
-    while [ "$i" -lt 80 ]; do
+    i=$(( $(date +%s) + 90 ))
+    while [ "$(date +%s)" -lt "$i" ]; do
       grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
-      sleep 0.1; i=$((i + 1))
+      sleep 0.5
     done
     grep -qF 'watcher: started pid=' "$armout" || fail "arm ($row) did not report a started watcher"
     ! grep -qE 'watcher: (healthy|attached)' "$armout" || fail "arm ($row) wrongly reported attached/healthy instead of starting a fresh watcher"
@@ -580,13 +733,12 @@ test_arm_hup_cleans_child_and_temp_output() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=60 "$WATCH_ARM" > "$armout" &
   armpid=$!
-  i=0
-  while [ "$i" -lt 80 ]; do
+  i=$(( $(date +%s) + 90 ))
+  while [ "$(date +%s)" -lt "$i" ]; do
     grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
-    sleep 0.1
-    i=$((i + 1))
+    sleep 0.5
   done
   grep -qF 'watcher: started pid=' "$armout" || fail "arm did not start before HUP cleanup check"
   lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
@@ -620,10 +772,18 @@ test_arm_propagates_immediate_wake_before_confirmation() {
 printf 'merged: https://example.test/pr/7\n'
 SH
   chmod 0700 "$check_file"
+  # Custom-check registration requires enforceable 0700 modes; on noacl mounts
+  # (Windows) chmod is cosmetic and the private-file gate can never pass, so
+  # this scenario is untestable there until the platform-aware mode-gate
+  # helper lands (wincompat scan issue 4).
+  if [ "$(stat -c %a "$check_file" 2>/dev/null || stat -f %Lp "$check_file" 2>/dev/null)" != 700 ]; then
+    pass "arm immediate-wake propagation skipped: 0700 modes are unenforceable on this mount"
+    return 0
+  fi
   FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-check-register.sh" task >/dev/null \
     || fail "could not register immediate-wake custom check"
   rc=0
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=0 FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" || rc=$?
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=0 FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=60 "$WATCH_ARM" > "$armout" || rc=$?
   [ "$rc" -eq 0 ] || fail "arm returned non-zero for an immediate wake (status $rc): $(cat "$armout")"
   grep -F "check: $check_file: merged: https://example.test/pr/7" "$armout" >/dev/null || fail "arm did not propagate the immediate check wake"
   ! grep -qF 'watcher: FAILED' "$armout" || fail "arm printed FAILED after a valid immediate wake"
@@ -737,6 +897,9 @@ test_lock_stale_steal_single_winner_under_concurrency
 test_lock_live_steal_mutex_is_not_reclaimed
 test_lock_does_not_steal_live_lock
 test_lock_empty_pid_uses_minimum_grace
+test_lock_numeric_pid_fresh_lock_is_not_stolen
+test_lock_steal_of_steal_is_bounded
+test_lock_symlink_unavailable_fails_bounded_and_loud
 test_lock_late_claim_loses_after_recreate
 test_lock_paused_mid_acquire_claim_fails_during_steal
 test_watch_restart_rejects_reused_pid
