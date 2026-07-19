@@ -206,6 +206,27 @@ assert_not_contains() {
   esac
 }
 
+# fm_test_modes_enforceable: succeed when exact file permission modes are real
+# on this filesystem. On mode-synthesizing filesystems (MSYS noacl mounts)
+# chmod is cosmetic and bin/fm-pr-lib.sh deliberately accepts exact-mode gates
+# there, so both exact-mode assertions and chmod-based negative fixtures are
+# unverifiable. Guard such an assertion or case with this helper and report it
+# as a skipped pass; on POSIX the guard always passes and coverage is unchanged.
+fm_test_modes_enforceable() {
+  if [ -z "${FM_TEST_MODES_ENFORCEABLE:-}" ]; then
+    if ! declare -F fm_pr_mode_unenforceable >/dev/null; then
+      # shellcheck source=bin/fm-pr-lib.sh disable=SC1091
+      . "$ROOT/bin/fm-pr-lib.sh"
+    fi
+    if fm_pr_mode_unenforceable 2>/dev/null; then
+      FM_TEST_MODES_ENFORCEABLE=no
+    else
+      FM_TEST_MODES_ENFORCEABLE=yes
+    fi
+  fi
+  [ "$FM_TEST_MODES_ENFORCEABLE" = yes ]
+}
+
 # expect_code <expected> <actual> <label>
 expect_code() {
   local expected=$1 actual=$2 label=$3

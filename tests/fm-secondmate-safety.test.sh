@@ -526,6 +526,8 @@ EOF
 
 test_home_seed_refuses_projectless_home_with_uninspectable_projects() {
   local home sub err
+  fm_test_modes_enforceable \
+    || { pass "uninspectable-projects refusal skipped: chmod cannot revoke access on this filesystem"; return 0; }
   home="$TMP_ROOT/no-projects-uninspectable-home"
   sub="$TMP_ROOT/no-projects-uninspectable-subhome"
   err="$TMP_ROOT/no-projects-uninspectable.err"
@@ -623,6 +625,8 @@ test_home_seed_refuses_projectless_home_with_non_directory_projects() {
 
 test_home_seed_refuses_projectless_home_with_uninspectable_registry() {
   local home sub err registry_before
+  fm_test_modes_enforceable \
+    || { pass "uninspectable-registry refusal skipped: chmod cannot revoke access on this filesystem"; return 0; }
   home="$TMP_ROOT/no-projects-uninspectable-registry-home"
   sub="$TMP_ROOT/no-projects-uninspectable-registry-subhome"
   err="$TMP_ROOT/no-projects-uninspectable-registry.err"
@@ -1493,8 +1497,10 @@ EOF
   [ "$(cat "$subhome/state/child.check.sh")" = 'child check' ] || fail "force teardown removed the child check before quarantine refusal"
   [ "$(cat "$external/child.check.protected")" = 'external quarantine artifact' ] \
     || fail "force teardown changed the child quarantine symlink target"
-  [ "$(file_mode "$external/child.check.protected")" = 640 ] \
-    || fail "force teardown changed the child quarantine target mode"
+  if fm_test_modes_enforceable; then
+    [ "$(file_mode "$external/child.check.protected")" = 640 ] \
+      || fail "force teardown changed the child quarantine target mode"
+  fi
   grep -F 'kill-window' "$log" >/dev/null && fail "force teardown killed a window before child quarantine validation"
   pass "secondmate force teardown prevalidates child quarantine cleanup without following symlinks"
 }

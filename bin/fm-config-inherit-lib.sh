@@ -38,28 +38,24 @@ FM_SHARED_CAPTAIN_MODE="444"
 # environment only in tests. Items must not contain whitespace.
 FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json crew-harness backlog-backend}"
 
+# File-attribute reads delegate to fm-pr-lib.sh, the one shared owner of
+# platform-aware stat and exact-mode validation. Not every consumer of this
+# lib sources fm-pr-lib.sh itself, so load it here when not already loaded.
+if ! declare -F fm_pr_mode_check >/dev/null; then
+  # shellcheck source=bin/fm-pr-lib.sh disable=SC1091
+  . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/fm-pr-lib.sh"
+fi
+
 fm_inherit_file_mode() {
-  if [ "$(uname)" = Darwin ]; then
-    stat -f %Lp "$1" 2>/dev/null
-  else
-    stat -c %a "$1" 2>/dev/null
-  fi
+  fm_pr_file_mode "$1"
 }
 
 fm_inherit_file_device() {
-  if [ "$(uname)" = Darwin ]; then
-    stat -f %d "$1" 2>/dev/null
-  else
-    stat -c %d "$1" 2>/dev/null
-  fi
+  fm_pr_file_device "$1"
 }
 
 fm_inherit_file_link_count() {
-  if [ "$(uname)" = Darwin ]; then
-    stat -f %l "$1" 2>/dev/null
-  else
-    stat -c %h "$1" 2>/dev/null
-  fi
+  fm_pr_file_link_count "$1"
 }
 
 fm_inherit_sha256() {
