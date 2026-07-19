@@ -235,16 +235,19 @@ fm_lock_remove_path() {
 }
 
 fm_lock_mid_acquire_is_fresh() {
-  local lockdir=$1 pid=$2 mid_acquire_stale
-  case "$pid" in
-    ''|*[!0-9]*)
-      mid_acquire_stale=$FM_LOCK_STALE_AFTER
-      [ "$mid_acquire_stale" -lt 2 ] && mid_acquire_stale=2
-      [ "$(fm_path_age "$lockdir")" -lt "$mid_acquire_stale" ]
-      return
-      ;;
-  esac
-  return 1
+  # A lock younger than the stale threshold is never stealable, whatever its
+  # pid field ($2, deliberately ignored) says. An empty pid is a claimant still
+  # writing its pid file; a numeric pid that just failed a liveness probe can
+  # be a just-forked holder whose kill -0 momentarily false-negatives (observed
+  # on MSYS under fork storms), and stealing on that reading breaks mutual
+  # exclusion - the concurrency test saw 2 winners under 40 contenders.
+  # The 5s floor must exceed worst-case fork/probe latency: on MSYS each
+  # command substitution is a multi-hundred-ms fork, so a contender's own
+  # startup routinely burns 2s+ between a holder's acquire and the probe.
+  local lockdir=$1 mid_acquire_stale
+  mid_acquire_stale=$FM_LOCK_STALE_AFTER
+  [ "$mid_acquire_stale" -lt 5 ] && mid_acquire_stale=5
+  [ "$(fm_path_age "$lockdir")" -lt "$mid_acquire_stale" ]
 }
 
 fm_lock_recheck_stale_owner() {
@@ -265,10 +268,51 @@ fm_lock_recheck_stale_owner() {
   return 0
 }
 
+# One-shot memoized symlink capability probe. The lock protocol is built on
+# atomic `ln -s` to an existing owner directory; when that cannot work -
+# Windows nativestrict without Developer Mode (hard failure), or default MSYS
+# without the MSYS env var (`ln -s` silently deep-copies, so readlink fails) -
+# every acquire would otherwise fail forever and waiters would loop or recurse
+# without bound (this hung session start for an hour on 2026-07-18). Probe the
+# same symlink + readlink round-trip the locks use, once per process, and fail
+# loudly with remediation instead.
+FM_LOCK_SYMLINK_OK=
+fm_lock_symlink_selftest() {
+  local target probe verdict
+  if [ -n "$FM_LOCK_SYMLINK_OK" ]; then
+    [ "$FM_LOCK_SYMLINK_OK" = yes ]
+    return
+  fi
+  verdict=no
+  # Probe against an existing directory: winsymlinks:nativestrict refuses
+  # symlinks to missing targets, which would fail the probe on a healthy box.
+  target=$(mktemp -d "$STATE/.symlink-selftest.XXXXXX" 2>/dev/null || true)
+  if [ -n "$target" ]; then
+    probe="$target.link"
+    if ln -s "$target" "$probe" 2>/dev/null \
+      && [ "$(readlink "$probe" 2>/dev/null || true)" = "$target" ]; then
+      verdict=yes
+    fi
+    rm -f "$probe" 2>/dev/null || true
+    rm -rf "$target" 2>/dev/null || true
+  fi
+  FM_LOCK_SYMLINK_OK=$verdict
+  if [ "$verdict" != yes ]; then
+    {
+      printf 'fm-wake-lib: symlink self-test failed in %s - lock acquisition cannot work here.\n' "$STATE"
+      printf 'fm-wake-lib: on Windows, enable Developer Mode and/or set MSYS=winsymlinks:nativestrict, then retry.\n'
+    } >&2
+    return 1
+  fi
+  return 0
+}
+
 fm_lock_try_acquire() {
   local lockdir=$1 pid steal cur rc steal_owner primary_owner
   FM_LOCK_HELD_PID=
   FM_LOCK_OWNER_DIR=
+
+  fm_lock_symlink_selftest || return 1
 
   if fm_lock_try_create "$lockdir"; then
     return 0
@@ -283,6 +327,20 @@ fm_lock_try_acquire() {
     FM_LOCK_HELD_PID=$pid
     return 1
   fi
+
+  # A steal lock never needs its own steal: it is held only for the sub-second
+  # window of one steal, so recursing onto .steal.steal (and deeper) buys
+  # nothing and is unbounded when lock creation persistently fails. Fail this
+  # acquire instead; every caller already handles acquire failure. The cost is
+  # that a steal lock abandoned by a holder killed mid-steal is not reclaimed
+  # automatically - a rare state that needs manual cleanup, unlike the
+  # unbounded recursion, which hung session start outright.
+  case "$lockdir" in
+    *.steal)
+      FM_LOCK_HELD_PID=$pid
+      return 1
+      ;;
+  esac
 
   steal="$lockdir.steal"
   if ! fm_lock_try_acquire "$steal"; then
@@ -340,6 +398,9 @@ fm_lock_try_acquire() {
 
 fm_lock_acquire_wait() {
   local lockdir=$1
+  # Without working symlinks no acquire can ever succeed: give up loudly (the
+  # self-test prints remediation once) instead of looping forever.
+  fm_lock_symlink_selftest || return 1
   while ! fm_lock_try_acquire "$lockdir"; do
     sleep 0.1
   done
@@ -381,7 +442,7 @@ fm_wake_append() {
   seq_file="$STATE/.wake-queue.seq"
   status=0
 
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
   seq=$(cat "$seq_file" 2>/dev/null || echo 0)
   case "$seq" in
     ''|*[!0-9]*) seq=0 ;;

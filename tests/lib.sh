@@ -36,8 +36,14 @@ export FM_GATE_REFUSE_BYPASS=1
 
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
+# The second, absolute re-cd pins the spelling: on MSYS a RELATIVE cd keeps a
+# Windows-spelled (C:/...) logical PWD inherited from the invoking process,
+# and fixtures built from a C:/-spelled ROOT then fail path-equality checks
+# against the /c/-spelled paths the scripts compute for themselves (an
+# absolute cd always normalizes to the POSIX spelling). A no-op elsewhere.
 # shellcheck disable=SC2034
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$ROOT" && pwd)"
 
 # --- reporters --------------------------------------------------------------
 
