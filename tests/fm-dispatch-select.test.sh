@@ -5,7 +5,7 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+BASE_PATH=${FM_TEST_BASE_PATH:-$FM_TEST_SYSTEM_PATH}
 TMP_ROOT=$(fm_test_tmproot fm-dispatch-select-tests)
 mkdir -p "$TMP_ROOT"
 
@@ -63,6 +63,7 @@ test_exact_tie_uses_first_profile() {
 test_quota_missing_falls_back_to_first() {
   local fakebin out err status
   fakebin=$(fm_fakebin "$TMP_ROOT/missing")
+  fm_fake_real_jq "$fakebin"
   out=$(PATH="$fakebin:$BASE_PATH" "$ROOT/bin/fm-dispatch-select.sh" --select quota-balanced "$profiles" 2>"$TMP_ROOT/missing.err")
   status=$?
   err=$(cat "$TMP_ROOT/missing.err")
@@ -81,6 +82,7 @@ test_quota_error_falls_back_to_first() {
 exit 42
 SH
   chmod +x "$fakebin/quota-axi"
+  fm_fake_real_jq "$fakebin"
   out=$(PATH="$fakebin:$BASE_PATH" "$ROOT/bin/fm-dispatch-select.sh" --select quota-balanced "$profiles" 2>"$TMP_ROOT/error.err")
   status=$?
   err=$(cat "$TMP_ROOT/error.err")
@@ -160,6 +162,7 @@ printf called > '$marker'
 exit 1
 SH
   chmod +x "$fakebin/quota-axi"
+  fm_fake_real_jq "$fakebin"
 
   single='{"harness":"grok","model":"grok-4","effort":"high"}'
   out=$(PATH="$fakebin:$BASE_PATH" "$ROOT/bin/fm-dispatch-select.sh" "$single")

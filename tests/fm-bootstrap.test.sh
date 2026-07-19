@@ -20,7 +20,7 @@ set -u
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+BASE_PATH=${FM_TEST_BASE_PATH:-$FM_TEST_SYSTEM_PATH}
 TMP_ROOT=$(fm_test_tmproot fm-bootstrap-tests)
 export FM_BACKEND_CMUX_BUNDLE_BIN="$TMP_ROOT/no-bundled-cmux"
 
@@ -108,16 +108,6 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/tasks-axi"
-}
-
-add_real_jq() {
-  local fakebin=$1 real_jq
-  real_jq=$(command -v jq 2>/dev/null) || fail "jq is required for dispatch profile validation tests"
-  cat > "$fakebin/jq" <<SH
-#!/usr/bin/env bash
-exec '$real_jq' "\$@"
-SH
-  chmod +x "$fakebin/jq"
 }
 
 make_fake_fleet_sync_root() {
@@ -672,7 +662,7 @@ make_routine_bootstrap_fixture() {
     printf 'home=%s\n' "$sm"
   } > "$home/state/sm.meta"
   fakebin=$(make_fake_toolchain "$case_dir")
-  add_real_jq "$fakebin"
+  fm_fake_real_jq "$fakebin"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = display-message ]; then
@@ -732,7 +722,7 @@ test_crew_dispatch_active_rules_are_verbose_bootstrap_info() {
   printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
   printf '%s\n' '{"rules":[{"when":"fresh news","use":{"harness":"grok"},"why":"current context"},{"when":"big feature","use":[{"harness":"claude","model":"claude-sonnet-5","effort":"high"},{"harness":"codex","model":"gpt-5.5","effort":"high"}],"select":"quota-balanced"}],"default":{"harness":"claude","model":"haiku","effort":"low"}}' > "$case_dir/home/config/crew-dispatch.json"
   fakebin=$(make_fake_toolchain "$case_dir")
-  add_real_jq "$fakebin"
+  fm_fake_real_jq "$fakebin"
 
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
@@ -757,7 +747,7 @@ test_crew_dispatch_validation() {
     printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
     printf '%s\n' "$body" > "$case_dir/home/config/crew-dispatch.json"
     fakebin=$(make_fake_toolchain "$case_dir")
-    add_real_jq "$fakebin"
+    fm_fake_real_jq "$fakebin"
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     case "$mode" in

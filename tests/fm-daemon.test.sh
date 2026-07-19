@@ -1400,6 +1400,10 @@ test_inject_wedge_alarm_fires_active_alert_on_non_tmux_backend() {
 }
 
 test_inject_wedge_alarm_throttles_when_marker_cannot_be_written() {
+  if ! fm_test_chmod_negative_works; then
+    skip "unwritable-marker wedge throttle: chmod cannot revoke write access on this host (noacl mounts)"
+    return 0
+  fi
   local dir state log daemon_log alerts errors
   dir=$(make_wedge_case wedge-unwritable-marker)
   state="$dir/state"; log="$dir/alert.log"; daemon_log="$dir/daemon.log"

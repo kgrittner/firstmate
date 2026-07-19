@@ -131,6 +131,9 @@ make_no_timeout_toolbin() {  # <dir> -> echoes toolbin path
     [ -n "$real" ] || fail "missing tool for no-timeout path: $tool"
     ln -s "$real" "$tb/$tool"
   done
+  # timeout/gtimeout must stay hidden, so /usr/bin cannot be appended; the DLL
+  # shim keeps the symlinked MSYS binaries loadable on Windows instead.
+  fm_test_toolbin_dlls "$tb"
   printf '%s\n' "$tb"
 }
 
@@ -1014,7 +1017,12 @@ test_dead_window_still_reports_active_run_step() {
 
 test_no_timeout_uses_perl_bound() {
   reset_fakes
-  local d toolbin out start elapsed calls_file calls
+  local d toolbin out start elapsed calls_file calls bound
+  # The bound proves the perl fallback cut the looping fake off (vs hanging
+  # forever). Process spawns cost whole seconds on Git Bash, so the wall-clock
+  # margin is wider there; the call-count assertion below stays exact.
+  bound=5
+  fm_test_windows && bound=30
   d=$(new_case no-timeout)
   make_repo_on_branch "$d/wt" fm/feat-timeout
   make_fakebin "$d" >/dev/null
@@ -1034,7 +1042,7 @@ SH
   elapsed=$((SECONDS - start))
   assert_contains "$out" "state: working" "timed-out no-mistakes falls back to pane"
   assert_contains "$out" "source: pane" "timed-out no-mistakes -> pane source"
-  [ "$elapsed" -lt 5 ] || fail "perl timeout did not bound no-mistakes calls (elapsed ${elapsed}s)"
+  [ "$elapsed" -lt "$bound" ] || fail "perl timeout did not bound no-mistakes calls (elapsed ${elapsed}s)"
   calls=$(awk 'END { print NR + 0 }' "$calls_file" 2>/dev/null || echo 0)
   [ "$calls" -eq 1 ] || fail "empty no-mistakes status triggered extra lookups ($calls calls)"
   pass "no timeout command uses perl bound"

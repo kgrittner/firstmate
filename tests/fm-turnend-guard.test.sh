@@ -517,6 +517,7 @@ test_hook_silent_without_jq() {
     tool_path=$(command -v "$tool") || fail "test host must provide $tool"
     ln -s "$tool_path" "$fakebin/$tool"
   done
+  fm_test_toolbin_dlls "$fakebin"
   out=$(printf '{"stop_hook_active":false}' | PATH="$fakebin" bash "$dir/bin/fm-turnend-guard.sh" 2>&1)
   status=$?
   expect_code 0 "$status" "hook must fail open (exit 0) when jq is unavailable"
@@ -535,13 +536,17 @@ test_hook_silent_without_stdin() {
 }
 
 test_hook_runs_fast() {
-  local dir start elapsed_s
+  local dir start elapsed_s bound
+  # Process spawns cost whole seconds on Git Bash, so the margin is wider there;
+  # the bound still catches pathological slowness (network calls, sleeps).
+  bound=3
+  fm_test_windows && bound=15
   dir=$(make_primary_dir "$TMP_ROOT/hook-timing")
   : > "$dir/state/task1.meta"
   start=$SECONDS
   run_hook "$dir" false >/dev/null
   elapsed_s=$((SECONDS - start))
-  [ "$elapsed_s" -lt 3 ] || fail "hook took ${elapsed_s}s, expected well under a second (generous 3s CI margin)"
+  [ "$elapsed_s" -lt "$bound" ] || fail "hook took ${elapsed_s}s, expected well under a second (generous ${bound}s margin)"
   pass "fm-turnend-guard: runs well under the generous timing margin (${elapsed_s}s)"
 }
 

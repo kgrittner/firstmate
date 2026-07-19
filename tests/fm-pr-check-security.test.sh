@@ -20,7 +20,7 @@ WATCH="$ROOT/bin/fm-watch.sh"
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
 REGISTER="$ROOT/bin/fm-check-register.sh"
 TMP_ROOT=$(fm_test_tmproot fm-pr-check-security)
-BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+BASE_PATH=${FM_TEST_BASE_PATH:-$FM_TEST_SYSTEM_PATH}
 REAL_CP=$(command -v cp)
 REAL_MV=$(command -v mv)
 REAL_STAT=$(command -v stat)
@@ -238,6 +238,10 @@ run_merge_entry() {
     "$PR_MERGE" "$@"
 }
 
+# CR-bearing rows are built at runtime: Git Bash's script reader drops the CR
+# from these $'...\r' literals when read out of a script file (tests/lib.sh
+# fm_test_cr), which would silently turn them into VALID urls.
+CR=$(fm_test_cr)
 # shellcheck disable=SC2016 # Literal rejected URL bytes are parser test data.
 INVALID_URLS=(
   'https://github.com/o/r/pull/1/'
@@ -245,9 +249,9 @@ INVALID_URLS=(
   'https://github.com/o/r/pull/1 '
   'https://github.com/o /r/pull/1'
   $'https://github.com/o/r/pull/1\t'
-  $'https://github.com/o/r/pull/1\r'
+  "https://github.com/o/r/pull/1$CR"
   $'https://github.com/o/r/pull/1\nnext'
-  $'https://github.com/o/r/pull/1\r\nnext'
+  "https://github.com/o/r/pull/1$CR"$'\nnext'
   $'https://github.com/o/r/pull/1\001'
   $'https://github.com/o/r/pull/1\033'
   $'https://github.com/o/r/pull/1\177'
